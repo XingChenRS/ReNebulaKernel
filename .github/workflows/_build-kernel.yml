@@ -379,35 +379,23 @@ jobs:
           rm -rf ./common/android/abi_gki_protected_exports_* 2>/dev/null || true
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl 2>/dev/null || true
 
-      - name: 补全 BUILD.bazel module_outs（TCP 拥塞模块）
+      - name: 补全 modules.bzl GKI 模块列表（TCP 拥塞模块）
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           python3 << 'PYEOF'
-          import re
-          path = "common/BUILD.bazel"
+          path = "common/modules.bzl"
           with open(path) as f:
               content = f.read()
           if "tcp_bic.ko" in content:
               exit(0)
-          lines = content.splitlines(keepends=True)
-          i = 0
-          while i < len(lines):
-              if "module_outs" in lines[i] and "=" in lines[i]:
-                  i += 1
-                  while i < len(lines):
-                      if re.match(r'^\s*\],\s*$', lines[i]):
-                          m = re.match(r'^(\s*)', lines[i])
-                          base = len(m.group(1)) if m else 0
-                          prefix = " " * (base + 4)
-                          extra = [prefix + '"net/ipv4/tcp_bic.ko",\n', prefix + '"net/ipv4/tcp_westwood.ko",\n', prefix + '"net/ipv4/tcp_htcp.ko",\n']
-                          for e in reversed(extra):
-                              lines.insert(i, e)
-                          with open(path, 'w') as f:
-                              f.writelines(lines)
-                          exit(0)
-                      i += 1
-                  break
-              i += 1
+          # 在 _COMMON_GKI_MODULES_LIST 中 "net/tipc/tipc.ko", 之后插入三项
+          old = ' "net/tipc/tipc.ko",\n'
+          new = ' "net/tipc/tipc.ko",\n "net/ipv4/tcp_bic.ko",\n "net/ipv4/tcp_htcp.ko",\n "net/ipv4/tcp_westwood.ko",\n'
+          if old not in content:
+              exit(1)
+          content = content.replace(old, new, 1)
+          with open(path, "w") as f:
+              f.write(content)
           PYEOF
 
       - name: 编译内核
