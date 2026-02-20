@@ -1,0 +1,428 @@
+name: _build-kernel
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        required: true
+        type: string
+      is_vki:
+        required: true
+        type: boolean
+      vivo_tarball_url:
+        required: false
+        type: string
+        default: "https://media.githubusercontent.com/media/morannlx/vivo-GKI/refs/heads/dev/vivo/android_16.0_kernel_MT6989.tar.gz"
+      android_version:
+        required: true
+        type: string
+      kernel_version:
+        required: true
+        type: string
+      sub_level:
+        required: true
+        type: string
+      os_patch_level:
+        required: true
+        type: string
+      version:
+        required: false
+        type: string
+      use_bbr:
+        required: true
+        type: boolean
+      use_bbg:
+        required: true
+        type: boolean
+      embed_zram:
+        required: true
+        type: boolean
+      zram_more_algos:
+        required: true
+        type: boolean
+      enable_susfs:
+        required: true
+        type: boolean
+      enable_kpm:
+        required: true
+        type: boolean
+
+jobs:
+  build:
+    name: "${{ inputs.branch }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: 构建配置摘要
+        run: |
+          echo "======== 构建配置 ========"
+          echo "分支: ${{ inputs.branch }} | VKI: ${{ inputs.is_vki }}"
+          echo "版本: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
+          echo "版本后缀: ${{ inputs.version }}"
+          echo "=========================="
+
+      - name: 清理磁盘空间
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
+          rm_cmd: "rmz"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 初始化构建环境
+        run: |
+          CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
+          KERNEL_ROOT="$GITHUB_WORKSPACE/$CONFIG"
+          mkdir -p "$KERNEL_ROOT"
+          cat >> $GITHUB_ENV << EOF
+          CONFIG=$CONFIG
+          KERNEL_ROOT=$KERNEL_ROOT
+          DEFCONFIG=$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig
+          SUSFS4KSU=$GITHUB_WORKSPACE/susfs4ksu
+          KERNEL_PATCHES=$GITHUB_WORKSPACE/kernel_patches
+          SUKISU_PATCHES=$GITHUB_WORKSPACE/SukiSU_patch
+          ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
+          AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool
+          MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py
+          BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+          EOF
+          mkdir -p "$GITHUB_WORKSPACE/git-repo"
+          curl -sL https://storage.googleapis.com/git-repo-downloads/repo -o "$GITHUB_WORKSPACE/git-repo/repo"
+          chmod 0755 "$GITHUB_WORKSPACE/git-repo/repo"
+          echo "$GITHUB_WORKSPACE/git-repo" >> "$GITHUB_PATH"
+          echo "REPO=$GITHUB_WORKSPACE/git-repo/repo" >> $GITHUB_ENV
+
+      - name: 安装编译依赖
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
+          execute_install_scripts: true
+
+      - name: 配置 ccache
+        run: |
+          mkdir -p ~/.cache/bazel
+          ccache --max-size=2G
+          ccache --set-config=compression=true
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      - name: 恢复 ccache 缓存
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: kernel-${{ inputs.branch }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ github.sha }}
+          restore-keys: kernel-${{ inputs.branch }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-
+
+      - name: 缓存工具链
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            kernel-build-tools
+            mkbootimg
+          key: toolchain-${{ runner.os }}-v1
+
+      - name: 下载工具链
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://android.googlesource.com/kernel/prebuilts/build-tools -b main-kernel-build-2024 kernel-build-tools
+          git clone --depth 1 https://android.googlesource.com/platform/system/tools/mkbootimg -b main-kernel-build-2024 mkbootimg
+
+      - name: 生成签名密钥
+        run: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > $BOOT_SIGN_KEY_PATH
+
+      - name: 克隆依赖仓库
+        run: |
+          git clone https://github.com/WildKernels/AnyKernel3.git -b gki-2.0
+          rm -rf AnyKernel3/.git
+          SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+          if [ "${{ inputs.branch }}" == "sukisu" ]; then
+            git clone https://github.com/ShirkNeko/susfs4ksu.git -b "$SUSFS_BRANCH"
+          else
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
+          fi
+          git clone https://github.com/WildKernels/kernel_patches.git
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git
+
+      - name: 初始化并同步内核源码（repo）
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          git clone --depth 1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.4.1.git gcc || true
+          FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
+          $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b common-${FORMATTED_BRANCH} --repo-rev=v2.16
+          REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${FORMATTED_BRANCH} 2>/dev/null || true)
+          if echo "$REMOTE_BRANCH" | grep -q deprecated; then
+            sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" .repo/manifests/default.xml
+          fi
+          $REPO sync -c -j$(nproc) --no-tags --fail-fast
+
+      - name: VKI 替换 common 并移除 vivo_rsc
+        if: ${{ inputs.is_vki }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          rm -rf common && mkdir -p common
+          curl -sL "${{ inputs.vivo_tarball_url }}" | tar -xzf - -C common --strip-components=0
+          [ -f common/Kconfig ] && sed -i 's|^source "kernel/vivo_rsc/Kconfig"|# source "kernel/vivo_rsc/Kconfig"  # 已移除|' common/Kconfig || true
+          [ -f common/kernel/Makefile ] && sed -i 's|^obj-\$(CONFIG_VIVO_RSC) += vivo_rsc/|# &  # 已移除|' common/kernel/Makefile || true
+
+      - name: 应用 Stock Config 伪装
+        run: |
+          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
+          STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
+          [ ! -f "$STOCK_SRC" ] && exit 0
+          mkdir -p "$(dirname "$STOCK_DST")"
+          cp "$STOCK_SRC" "$STOCK_DST"
+          TARGET_MAKEFILE="$KERNEL_ROOT/common/kernel/Makefile"
+          [ ! -f "$TARGET_MAKEFILE" ] && exit 0
+          if grep -qF '$(obj)/config_data: $(KCONFIG_CONFIG) FORCE' "$TARGET_MAKEFILE"; then
+            sed -i 's|\$(obj)/config_data: \$(KCONFIG_CONFIG) FORCE|$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE|' "$TARGET_MAKEFILE"
+          fi
+
+      - name: 提取实际子版本号
+        run: |
+          ACTUAL="${{ inputs.sub_level }}"
+          [ -f "$KERNEL_ROOT/common/Makefile" ] && EXTRACTED=$(grep '^SUBLEVEL = ' "$KERNEL_ROOT/common/Makefile" | awk '{print $3}') && [ -n "$EXTRACTED" ] && ACTUAL="$EXTRACTED"
+          echo "ACTUAL_SUBLEVEL=$ACTUAL" >> $GITHUB_ENV
+
+      - name: 修复 glibc 2.38 兼容性
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          RAW="${{ inputs.sub_level }}"; [[ ! "$RAW" =~ ^[0-9]+$ ]] && CURRENT_SUB=99999 || CURRENT_SUB=$RAW
+          [[ "${{ inputs.android_version }}" == "android14" && "${{ inputs.kernel_version }}" == "6.1" && $CURRENT_SUB -le 43 ]] && sed -i '/\$(Q)\$(MAKE) -C \$(SUBCMD_SRC) OUTPUT=/s//$(Q)$(MAKE) -C $(SUBCMD_SRC) EXTRA_CFLAGS="$(CFLAGS)" OUTPUT=/' tools/bpf/resolve_btfids/Makefile 2>/dev/null || true
+
+      - name: 确定 KernelSU 分支
+        if: ${{ inputs.branch == 'sukisu' || inputs.branch == 'resukisu' }}
+        run: |
+          [ "${{ inputs.enable_susfs }}" = "true" ] && echo "BRANCH=-s builtin" >> $GITHUB_ENV || echo "BRANCH=-s main" >> $GITHUB_ENV
+
+      - name: 添加 KernelSU
+        if: ${{ inputs.branch == 'sukisu' || inputs.branch == 'resukisu' }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          if [ "${{ inputs.branch }}" == "sukisu" ]; then
+            curl -sL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $BRANCH
+          else
+            curl -sL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash $BRANCH
+          fi
+
+      - name: 修复 ksud.h 重复定义
+        if: ${{ inputs.branch == 'sukisu' || inputs.branch == 'resukisu' }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          [ ! -f "common/drivers/kernelsu/ksud.h" ] && exit 0
+          cd common
+          python3 << 'PYEOF'
+          with open("drivers/kernelsu/ksud.h", "r") as f:
+              lines = f.readlines()
+          n = len(lines)
+          idxs = [i for i in range(n) if "struct user_arg_ptr" in lines[i] and "{" in lines[i]]
+          if len(idxs) < 2:
+              exit(0)
+          start = idxs[1]
+          brace = 0
+          end = start + 12
+          for i in range(start, min(start + 25, n)):
+              brace += lines[i].count("{") - lines[i].count("}")
+              if brace == 0 and "};" in lines[i]:
+                  end = i
+                  break
+          end_inc = end
+          for i in range(end + 1, min(end + 15, n)):
+              if "ksu_handle_execveat_ksud" in lines[i]:
+                  end_inc = i
+                  for j in range(i, min(i + 5, n)):
+                      if ");" in lines[j]:
+                          end_inc = j
+                          break
+                  break
+          for i in range(start, end_inc + 1):
+              if not lines[i].strip().startswith("//"):
+                  lines[i] = "// " + lines[i]
+          with open("drivers/kernelsu/ksud.h", "w") as f:
+              f.writelines(lines)
+          PYEOF
+
+      - name: 应用 SUSFS 补丁
+        if: ${{ inputs.enable_susfs && (inputs.branch == 'sukisu' || inputs.branch == 'resukisu') }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          cp $SUSFS4KSU/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./common/
+          cp $SUSFS4KSU/kernel_patches/fs/* ./common/fs/
+          cp $SUSFS4KSU/kernel_patches/include/linux/* ./common/include/linux/
+          cd $KERNEL_ROOT/common
+          patch -p1 -f < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          if [[ "${{ inputs.android_version }}" == "android14" && "${{ inputs.kernel_version }}" == "6.1" ]]; then
+            [ -f "$KERNEL_PATCHES/wild/susfs_fix_patches/v2.0.0/a14-6.1/base.c.patch" ] && cp "$KERNEL_PATCHES/wild/susfs_fix_patches/v2.0.0/a14-6.1/base.c.patch" . && patch -p1 -f < base.c.patch || true
+            grep -qF '#include <linux/dma-buf.h>' ./fs/proc/base.c || sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
+            grep -q 'susfs_is_current_proc_umounted' ./fs/proc/base.c && grep -qF '#include <linux/susfs.h>' ./fs/proc/base.c || sed -i '/#include <linux\/dma-buf.h>/a #include <linux\/susfs.h>' ./fs/proc/base.c
+          fi
+
+      - name: 应用 69_hide_stuff 补丁
+        if: ${{ inputs.branch == 'sukisu' || inputs.branch == 'resukisu' }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          [ "${{ inputs.branch }}" == "sukisu" ] && cp $SUKISU_PATCHES/69_hide_stuff.patch ./ || cp $KERNEL_PATCHES/69_hide_stuff.patch ./
+          patch -p1 -F 3 -f < 69_hide_stuff.patch || true
+
+      - name: 配置 ZRAM LZ4 补丁栈（更多算法）
+        if: ${{ inputs.zram_more_algos }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          cp -r $SUKISU_PATCHES/other/zram/lz4k/include/linux/* ./include/linux/
+          cp -r $SUKISU_PATCHES/other/zram/lz4k/lib/* ./lib/
+          cp -r $SUKISU_PATCHES/other/zram/lz4k/crypto/* ./crypto/
+          cp -r $SUKISU_PATCHES/other/zram/lz4k_oplus ./lib/
+          cp $SUKISU_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4kd.patch ./
+          patch -p1 -F 3 -f < lz4kd.patch || true
+          cp $SUKISU_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4k_oplus.patch ./
+          patch -p1 -F 3 -f < lz4k_oplus.patch || true
+
+      - name: 添加 BBG 防格机补丁
+        if: ${{ inputs.use_bbg }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          wget -qO- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+          echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig 2>/dev/null || true
+
+      - name: 配置内核选项（KSU/BBR/通用）
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          CF="$DEFCONFIG"
+          echo "CONFIG_TMPFS_XATTR=y" >> "$CF"
+          echo "CONFIG_TMPFS_POSIX_ACL=y" >> "$CF"
+          echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$CF"
+          echo "CONFIG_TCP_CONG_BBR=y" >> "$CF"
+          echo "CONFIG_NET_SCH_FQ=y" >> "$CF"
+          [ "${{ inputs.use_bbr }}" = "true" ] && echo "CONFIG_DEFAULT_BBR=y" >> "$CF"
+          if [ "${{ inputs.branch }}" == "sukisu" ] || [ "${{ inputs.branch }}" == "resukisu" ]; then
+            echo "CONFIG_KSU=y" >> "$CF"
+            [ "${{ inputs.enable_kpm }}" = "true" ] && echo "CONFIG_KPM=y" >> "$CF"
+          fi
+          sed -i 's/check_defconfig//' ./common/build.config.gki 2>/dev/null || true
+
+      - name: 配置 ZRAM 选项（内嵌/更多算法）
+        if: ${{ inputs.embed_zram || inputs.zram_more_algos }}
+        run: |
+          CF="$DEFCONFIG"
+          grep -q "CONFIG_ZSMALLOC" "$CF" && sed -i 's/CONFIG_ZSMALLOC=m/CONFIG_ZSMALLOC=y/g' "$CF" || echo "CONFIG_ZSMALLOC=y" >> "$CF"
+          sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CF"
+          echo "CONFIG_ZRAM=y" >> "$CF"
+          if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ]; then
+            [ -f "$KERNEL_ROOT/common/modules.bzl" ] && sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$KERNEL_ROOT/common/modules.bzl"
+            echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CF"
+          fi
+          if [ "${{ inputs.zram_more_algos }}" = "true" ]; then
+            echo "CONFIG_CRYPTO_LZ4HC=y" >> "$CF"
+            echo "CONFIG_CRYPTO_LZ4K=y" >> "$CF"
+            echo "CONFIG_CRYPTO_LZ4KD=y" >> "$CF"
+            echo "CONFIG_CRYPTO_842=y" >> "$CF"
+            echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> "$CF"
+          fi
+
+      - name: 添加 SUSFS 配置
+        if: ${{ inputs.enable_susfs && (inputs.branch == 'sukisu' || inputs.branch == 'resukisu') }}
+        run: |
+          cat >> "$DEFCONFIG" << 'EOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          EOF
+
+      - name: 配置内核名称与构建时间
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          DATESTR=$(TZ='UTC' date +'%a %b %d %T %Z %Y')
+          echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> $GITHUB_ENV
+          [ -f ./common/scripts/mkcompile_h ] && perl -pi -e "s{UTS_VERSION=\"\\\$\(.*?\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" ./common/scripts/mkcompile_h 2>/dev/null || true
+          VER="${{ inputs.version }}"
+          [ -z "$VER" ] && VER="NebulaML_XingChen-${{ inputs.branch }}"
+          CLEAN_VER=$(echo "$VER" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//')
+          sed -i "\$s|echo \"\$res\"|echo \"$CLEAN_VER\"|" ./common/scripts/setlocalversion 2>/dev/null || true
+          sed -i '/^CONFIG_LOCALVERSION=/ s/="[^"]*"/="'"$CLEAN_VER"'"/' ./common/arch/arm64/configs/gki_defconfig 2>/dev/null || echo "CONFIG_LOCALVERSION=\"$CLEAN_VER\"" >> ./common/arch/arm64/configs/gki_defconfig
+          sed -i '/^[[:space:]]*"protected_exports_list"/d' ./common/BUILD.bazel 2>/dev/null || true
+          rm -rf ./common/android/abi_gki_protected_exports_* 2>/dev/null || true
+          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl 2>/dev/null || true
+
+      - name: 编译内核
+        run: |
+          set -ex
+          cd "$KERNEL_ROOT"
+          sed -i 's/BUILD_SYSTEM_DLKM=1/BUILD_SYSTEM_DLKM=0/' ./common/build.config.gki.aarch64
+          sed -i '/MODULES_ORDER=android\/gki_aarch64_modules/d' ./common/build.config.gki.aarch64
+          sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64
+          tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist || exit 1
+          strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version' || true
+
+      - name: 应用 KPM 补丁
+        if: ${{ inputs.enable_kpm && (inputs.branch == 'sukisu' || inputs.branch == 'resukisu') }}
+        run: |
+          TARGET_PATH="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
+          cp -r $SUKISU_PATCHES/kpm/patch_linux "$TARGET_PATH/patch"
+          cd "$TARGET_PATH"
+          chmod +x patch
+          ./patch
+          rm -f Image
+          mv oImage Image
+
+      - name: 准备 Boot 镜像与 AnyKernel3
+        run: |
+          mkdir -p bootimgs
+          SRC="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
+          cp "$SRC/Image" ./bootimgs/
+          cp "$SRC/Image.lz4" ./bootimgs/
+          cp "$SRC/Image" ./
+          cp "$SRC/Image.lz4" ./
+          gzip -n -k -f -9 ./Image > ./Image.gz
+          cd $ANYKERNEL3
+          ZIP_NAME="${{ inputs.branch }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          mv ../Image ./Image
+          zip -r "../$ZIP_NAME" ./*
+
+      - name: 构建 Boot 镜像 (Android 13+)
+        working-directory: bootimgs
+        run: |
+          gzip -n -k -f -9 ./Image > ./Image.gz
+          $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64*1024*1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64*1024*1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64*1024*1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.branch }}-kernel-${{ env.CONFIG }}
+          path: |
+            *AnyKernel3.zip
+            *.img
+          compression-level: 9

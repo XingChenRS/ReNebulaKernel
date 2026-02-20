@@ -1,0 +1,67 @@
+name: 构建 Pure
+
+on:
+  workflow_dispatch:
+    inputs:
+      is_vki:
+        description: "是否为 VKI（vivo 源码替换 common）"
+        type: boolean
+        default: false
+      vivo_tarball_url:
+        description: "VKI 时 tarball 直链（在线拉取）"
+        type: string
+        default: "https://media.githubusercontent.com/media/morannlx/vivo-GKI/refs/heads/dev/vivo/android_16.0_kernel_MT6989.tar.gz"
+      android_version:
+        type: string
+        default: "android14"
+      kernel_version:
+        type: string
+        default: "6.1"
+      sub_level:
+        type: string
+        default: "145"
+      os_patch_level:
+        type: string
+        default: "2025-09"
+      version:
+        description: "内核版本后缀（空则 NebulaML_XingChen-pure）"
+        type: string
+        default: "NebulaML_XingChen-pure"
+      use_bbr:
+        type: boolean
+        default: true
+      use_bbg:
+        type: boolean
+        default: false
+      embed_zram:
+        type: boolean
+        default: true
+      zram_more_algos:
+        type: boolean
+        default: true
+      enable_susfs:
+        type: boolean
+        default: false
+      enable_kpm:
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-kernel.yml
+    secrets: inherit
+    with:
+      branch: pure
+      is_vki: ${{ inputs.is_vki }}
+      vivo_tarball_url: ${{ inputs.vivo_tarball_url }}
+      android_version: ${{ inputs.android_version }}
+      kernel_version: ${{ inputs.kernel_version }}
+      sub_level: ${{ inputs.sub_level }}
+      os_patch_level: ${{ inputs.os_patch_level }}
+      version: ${{ inputs.version }}
+      use_bbr: ${{ inputs.use_bbr }}
+      use_bbg: ${{ inputs.use_bbg }}
+      embed_zram: ${{ inputs.embed_zram }}
+      zram_more_algos: ${{ inputs.zram_more_algos }}
+      enable_susfs: ${{ inputs.enable_susfs }}
+      enable_kpm: ${{ inputs.enable_kpm }}

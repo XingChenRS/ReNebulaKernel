@@ -1,0 +1,2 @@
+# Optional local config (not required for CI)
+config/stock_defconfig
