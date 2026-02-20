@@ -154,11 +154,21 @@ jobs:
           git clone https://github.com/WildKernels/AnyKernel3.git -b gki-2.0
           rm -rf AnyKernel3/.git
           SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+          clone_susfs() {
+            local url=$1
+            if git clone "$url" -b "$SUSFS_BRANCH" susfs4ksu 2>/dev/null; then echo "SUSFS_ACTUAL_BRANCH=$SUSFS_BRANCH" >> $GITHUB_ENV; return 0; fi
+            for fallback in gki-android15-6.1 gki-android14-6.1; do
+              if git clone "$url" -b "$fallback" susfs4ksu 2>/dev/null; then echo "SUSFS_ACTUAL_BRANCH=$fallback" >> $GITHUB_ENV; return 0; fi
+            done
+            git clone "$url" susfs4ksu
+            (cd susfs4ksu && echo "SUSFS_ACTUAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV)
+          }
           if [ "${{ inputs.branch }}" == "sukisu" ]; then
-            git clone https://github.com/ShirkNeko/susfs4ksu.git -b "$SUSFS_BRANCH"
+            clone_susfs "https://github.com/ShirkNeko/susfs4ksu.git"
           else
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
+            clone_susfs "https://gitlab.com/simonpunk/susfs4ksu.git"
           fi
+          [ -z "${SUSFS_ACTUAL_BRANCH:-}" ] && echo "SUSFS_ACTUAL_BRANCH=$SUSFS_BRANCH" >> $GITHUB_ENV
           git clone https://github.com/WildKernels/kernel_patches.git
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
 
@@ -264,11 +274,11 @@ jobs:
         if: ${{ inputs.enable_susfs && (inputs.branch == 'sukisu' || inputs.branch == 'resukisu') }}
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
-          cp $SUSFS4KSU/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./common/
+          cp $SUSFS4KSU/kernel_patches/50_add_susfs_in_${{ env.SUSFS_ACTUAL_BRANCH }}.patch ./common/
           cp $SUSFS4KSU/kernel_patches/fs/* ./common/fs/
           cp $SUSFS4KSU/kernel_patches/include/linux/* ./common/include/linux/
           cd $KERNEL_ROOT/common
-          patch -p1 -f < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          patch -p1 -f < 50_add_susfs_in_${{ env.SUSFS_ACTUAL_BRANCH }}.patch || true
           if [[ "${{ inputs.android_version }}" == "android14" && "${{ inputs.kernel_version }}" == "6.1" ]]; then
             [ -f "$KERNEL_PATCHES/wild/susfs_fix_patches/v2.0.0/a14-6.1/base.c.patch" ] && cp "$KERNEL_PATCHES/wild/susfs_fix_patches/v2.0.0/a14-6.1/base.c.patch" . && patch -p1 -f < base.c.patch || true
             grep -qF '#include <linux/dma-buf.h>' ./fs/proc/base.c || sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
