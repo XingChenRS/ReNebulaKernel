@@ -72,7 +72,7 @@ scripts/
 
 ## 不可变构建计划
 
-`resolve-plan.yml` 将页面输入转换为 `build-plan.json`。之后的步骤只读取这个文件，避免同一个输入在多个 YAML 中被重新解释。
+`resolve-plan.yml` 将页面输入转换为 `build-plan.json`。之后的步骤只读取这个文件，避免同一个输入在多个 YAML 中被重新解释。P0 的页面只暴露一个已锁定 target；Root 和特性要等对应 adapter 通过验证后才进入页面选项。
 
 ```json
 {
@@ -81,13 +81,14 @@ scripts/
   "root": "none",
   "features": [],
   "source": {
-    "manifest_ref": "common-android14-6.1-2025-09",
-    "common_commit": "<resolved sha>"
+    "lock_id": "google-gki-a14-6.1-p0",
+    "manifest_commit": "<locked sha>",
+    "common_commit": "<locked sha>"
   },
   "version": {
-    "base_release": "<read from common/Makefile>",
+    "expected_base_release": "<audited locked value>",
     "local_suffix": "-ReNebula-v2-a14-6.1-none",
-    "expected_uname_release": "<base_release><local_suffix>"
+    "expected_uname_release": "<expected_base_release><local_suffix>"
   },
   "locks": {
     "root": null,
@@ -96,7 +97,7 @@ scripts/
 }
 ```
 
-计划解析必须拒绝未知 target、未知 Root、未锁定来源、冲突特性和不支持的组合。页面输入不允许直接传 URL、分支名或任意 shell 片段。
+计划解析必须拒绝未知 target、未知 Root、未锁定来源、冲突特性和不支持的组合。页面输入不允许直接传 URL、分支名或任意 shell 片段。`expected_base_release` 只是锁定断言；真正的基础版本必须在源码同步后从 `common/Makefile` 重新解析并严格比对。
 
 ## Root 与功能解耦
 
@@ -109,7 +110,7 @@ Root 是单选，特性是 capability-gated 的集合：
 | `sukisu` | 后续 | 待验证 | 仅经 profile 明确允许 | 不隐式启用 builtin/KPM |
 | `sakisu` | 后续 | 单独 profile | 否 | 首先只支持 tracepoint 模式 |
 
-SakiSU 固定到 `XingChenRS/SakiSU@6f9672837b9359f8853f47e18e00261edbf6d31e`。其 adapter 不能调用会 `git pull` 的上游 `setup.sh`，而应在 GKI checkout 根目录以 detached checkout 接入完整 Git 工作树：
+SakiSU 固定到 `XingChenRS/SakiSU@6f9672837b9359f8853f47e18e00261edbf6d31e`，在 P1 完成 `sakisu-tracepoint` 验证后才成为页面 Root 预选项。其 adapter 不能调用会 `git pull` 的上游 `setup.sh`，而应在 GKI checkout 根目录以 detached checkout 接入完整 Git 工作树：
 
 1. 将 `common/drivers/kernelsu` 链接至 `KernelSU/kernel`；
 2. 幂等加入 `obj-$(CONFIG_KSU) += kernelsu/`；
@@ -142,7 +143,7 @@ xxz 当前 branding action 把完整 `kernel_version.sublevel` 写进 `scripts/s
 
 ## 来源、补丁与可观测性
 
-- Google manifest、Root、SUSFS、打包器和工具链必须在 `sources.lock.json` 中固定完整 SHA；构建摘要记录最终解析值。
+- `sources.lock.json` 必须固定 Google manifest、manifest XML 摘要、每个同步 project（至少 common、构建脚本、Kleaf/Bazel 依赖与预编译工具链）、Root、SUSFS、打包器和工具链的完整 SHA；构建摘要记录最终解析值。
 - 所有补丁先运行 preflight；关键补丁失败立即失败，绝不使用 `patch ... || true` 掩盖结果。
 - 失败时始终上传 `.rej`、受影响文件列表、`build-plan.json`、已解析 source SHA 与最后构建日志。
 - 初期不引入设备补丁、ABI export 删除、bypass 双镜像、BBRv3、CIFS、NTSync、DroidSpaces、BBG 或复杂缓存；每个能力只有在独立 profile 验证后才能加入。
@@ -150,7 +151,7 @@ xxz 当前 branding action 把完整 `kernel_version.sublevel` 写进 `scripts/s
 
 ## 迁移阶段
 
-1. **P0：纯 GKI** — `android14-6.1 + none`，验证 source lock、Image、真实 uname 和诊断产物。
+1. **P0：纯 GKI** — 页面仅选 `android14-6.1`，固定 `root=none`、无特性；验证 source lock、Image、真实 uname 和诊断产物。
 2. **P1：Root adapters** — 依次加入 ksun、sukisu、sakisu-tracepoint；每个 adapter 有独立组合测试。
 3. **P2：受控特性** — 每个 Root/特性组合以 profile 声明，而非自由叠加；先验证再开放 SUSFS。
 4. **P3：打包与发布** — 仅在正常 Image 持续稳定后评估 AnyKernel3、boot image 和 release；保留对应许可证与 notices。
