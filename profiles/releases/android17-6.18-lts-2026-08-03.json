@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 4,
   "kind": "gki-release",
   "id": "android17-6.18-lts-2026-08-03",
   "family_id": "android17-6.18",
@@ -7,6 +7,6 @@
   "state": "source-locked",
   "version": {
     "expected_base_release": "6.18.32",
-    "local_suffix": "-ReNebula-v2-a17-6.18-none"
+    "local_suffix_prefix": "-ReNebula-v3-a17-6.18"
   }
 }

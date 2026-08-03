@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Static gate for ReNebula's immutable multi-KMI definitions.
+"""Static gate for ReNebula's immutable multi-KMI selector definitions.
 
-This runs before any GKI source is downloaded.  It validates the registry,
-family/release/lock graph, the generated Actions selector, and boundaries that
-prevent floating sources, a second kernel-version writer, retired Vivo inputs,
-or KernelSU-Next support from returning.
+This runs before any GKI or root-provider source is downloaded.  It validates
+the release/root/config graph, the generated Actions selector, and boundaries
+that prevent floating sources, a second kernel-version writer, retired Vivo
+inputs, or KernelSU-Next support from returning.
 """
 
 from __future__ import annotations
@@ -36,12 +36,6 @@ RETIRED_SOURCE_RE = re.compile(r"(?:vivo|is_vki|vki|vivo_tarball_url)", re.IGNOR
 EXCLUDED_ROOT_RE = re.compile(r"(?:kernel.?su.?next|\bksun\b|\bksu.?next\b)", re.IGNORECASE)
 VERSION_WRITE_RE = re.compile(r"(?:scripts/setlocalversion|CONFIG_LOCALVERSION)")
 SAFE_SUFFIX_RE = re.compile(r"^-[A-Za-z0-9._-]+$")
-OPTIONS_BLOCK_RE = re.compile(
-    r"^\s*# BEGIN GENERATED RELEASE OPTIONS\s*$"
-    r"(?P<options>.*?)"
-    r"^\s*# END GENERATED RELEASE OPTIONS\s*$",
-    re.MULTILINE | re.DOTALL,
-)
 OPTION_LINE_RE = re.compile(r"^\s*-\s+([a-z0-9][a-z0-9._-]*)\s*$")
 REQUIRED_FAMILY_ADAPTERS = {
     "android12-5.10": "legacy-build-sh-arm64-v1",
@@ -53,6 +47,20 @@ REQUIRED_FAMILY_ADAPTERS = {
     "android16-6.12": "kleaf-defconfig-fragment-arm64-v1",
     "android17-6.18": "kleaf-defconfig-fragment-arm64-v1",
 }
+RESUKISU_COMBINATIONS = (
+    ("resukisu", "lkm", "tracepoint", "release"),
+    ("resukisu", "lkm", "tracepoint", "debug"),
+    ("resukisu", "builtin", "tracepoint", "release"),
+    ("resukisu", "builtin", "tracepoint", "debug"),
+)
+REQUIRED_FAMILY_SELECTOR_COMBINATIONS = {
+    family_id: (("none", "none", "none", "release"),) + RESUKISU_COMBINATIONS
+    for family_id in REQUIRED_FAMILY_ADAPTERS
+    if family_id != "android17-6.18"
+}
+REQUIRED_FAMILY_SELECTOR_COMBINATIONS["android17-6.18"] = (
+    ("none", "none", "none", "release"),
+)
 
 
 class RepositoryError(ValueError):
@@ -72,32 +80,55 @@ def read_text(path: Path) -> str:
         raise RepositoryError(f"cannot read {path}: {error}") from error
 
 
+def expected_profile_files(root: Path, entries: List[Dict[str, Any]], key: str) -> set[str]:
+    return {entry[key] for entry in entries}
+
+
+def ensure_profile_files_match_registry(
+    root: Path, directory: str, entries: List[Dict[str, Any]]
+) -> None:
+    actual = {
+        path.relative_to(root).as_posix()
+        for path in collect_files(root / "profiles" / directory, (".json",))
+    }
+    expected = expected_profile_files(root, entries, "profile")
+    if actual != expected:
+        raise RepositoryError(
+            f"profiles/{directory} must exactly match the selector registry; "
+            f"missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}"
+        )
+
+
 def ensure_registry_graph(root: Path) -> Dict[str, Any]:
     registry, registry_path = resolve_plan.load_registry(root)
     entries = registry["releases"]
+    root_entries = registry["root_providers"]
+    root_linkages = registry["root_linkages"]
+    hook_modes = registry["hook_modes"]
+    config_entries = registry["config_profiles"]
     entry_ids = {entry["id"] for entry in entries}
     entry_families = {entry["family_id"] for entry in entries}
     if set(REQUIRED_FAMILY_ADAPTERS) != entry_families:
         missing = sorted(set(REQUIRED_FAMILY_ADAPTERS) - entry_families)
         unexpected = sorted(entry_families - set(REQUIRED_FAMILY_ADAPTERS))
         raise RepositoryError(
-            f"registry must cover every supported complete KMI chain; "
+            "registry must cover every supported complete KMI chain; "
             f"missing={missing}, unexpected={unexpected}"
         )
     if len(entries) != len(entry_families):
         raise RepositoryError("registry must contain exactly one current release per KMI family")
+    if [entry["id"] for entry in root_entries] != ["none", "resukisu"]:
+        raise RepositoryError("selector registry must expose only none and resukisu root providers")
+    if root_linkages != ["none", "lkm", "builtin"]:
+        raise RepositoryError("selector registry exposes an unexpected root linkage")
+    if hook_modes != ["none", "tracepoint"]:
+        raise RepositoryError("selector registry exposes an unexpected hook mode")
+    if [entry["id"] for entry in config_entries] != ["release", "debug"]:
+        raise RepositoryError("selector registry exposes an unexpected config profile")
 
-    release_files = {
-        path.relative_to(root).as_posix()
-        for path in collect_files(root / "profiles" / "releases", (".json",))
-    }
-    expected_release_files = {entry["profile"] for entry in entries}
-    if release_files != expected_release_files:
-        raise RepositoryError(
-            "release profile files must exactly match the registry; "
-            f"missing={sorted(expected_release_files - release_files)}, "
-            f"unexpected={sorted(release_files - expected_release_files)}"
-        )
+    ensure_profile_files_match_registry(root, "releases", entries)
+    ensure_profile_files_match_registry(root, "root-providers", root_entries)
+    ensure_profile_files_match_registry(root, "config-profiles", config_entries)
     family_files = {
         path.stem for path in collect_files(root / "profiles" / "families", (".json",))
     }
@@ -116,8 +147,13 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
     locks = lock_document.get("locks")
     if not isinstance(locks, dict):
         raise RepositoryError("sources lock must contain locks")
+
     expected_lock_ids = set()
-    plans: Dict[str, Dict[str, Any]] = {}
+    plans: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
+    seen_root_providers = set()
+    seen_root_linkages = set()
+    seen_hook_modes = set()
+    seen_config_profiles = set()
     for entry in entries:
         release_id = entry["id"]
         _, release, _ = resolve_plan.load_release(root, release_id, registry)
@@ -125,6 +161,11 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
         adapter = family["build"]["adapter"]
         if adapter != REQUIRED_FAMILY_ADAPTERS[entry["family_id"]]:
             raise RepositoryError(f"{entry['family_id']} has the wrong build adapter")
+        allowed_combinations = tuple(resolve_plan.allowed_selector_combinations(family))
+        if allowed_combinations != REQUIRED_FAMILY_SELECTOR_COMBINATIONS[entry["family_id"]]:
+            raise RepositoryError(
+                f"{entry['family_id']} selector combinations diverge from the audited support matrix"
+            )
         lock_id = release["source_lock"]
         expected_lock_ids.add(lock_id)
         lock = load_lock(root / "locks" / "sources.lock.json", lock_id)
@@ -132,7 +173,18 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
             raise RepositoryError(f"{release_id} does not agree with its source lock")
         if lock["version"]["expected_base_release"] != release["version"]["expected_base_release"]:
             raise RepositoryError(f"{release_id} has a source-lock version mismatch")
-        plans[release_id] = resolve_plan.resolve_plan(root, release_id)
+        for root_provider, root_linkage, hook_mode, config_profile in allowed_combinations:
+            plan = resolve_plan.resolve_plan(
+                root, release_id, root_provider, root_linkage, hook_mode, config_profile
+            )
+            key = (release_id, root_provider, root_linkage, hook_mode, config_profile)
+            if key in plans:
+                raise RepositoryError(f"selector tuple is repeated: {key}")
+            plans[key] = plan
+            seen_root_providers.add(root_provider)
+            seen_root_linkages.add(root_linkage)
+            seen_hook_modes.add(hook_mode)
+            seen_config_profiles.add(config_profile)
     if set(locks) != expected_lock_ids:
         raise RepositoryError(
             "sources lock entries must exactly match registered releases; "
@@ -141,11 +193,24 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
         )
     if len(expected_lock_ids) != len(entry_ids):
         raise RepositoryError("each registered release must have its own immutable source lock")
+    if seen_root_providers != {entry["id"] for entry in root_entries}:
+        raise RepositoryError("every UI root provider must appear in an enabled selector tuple")
+    if seen_root_linkages != set(root_linkages):
+        raise RepositoryError("every UI root linkage must appear in an enabled selector tuple")
+    if seen_hook_modes != set(hook_modes):
+        raise RepositoryError("every UI hook mode must appear in an enabled selector tuple")
+    if seen_config_profiles != {entry["id"] for entry in config_entries}:
+        raise RepositoryError("every UI config profile must appear in an enabled selector tuple")
     return {
         "registry": registry,
         "registry_path": registry_path,
         "plans": plans,
         "release_ids": [entry["id"] for entry in entries],
+        "root_provider_ids": [entry["id"] for entry in root_entries],
+        "root_linkages": root_linkages,
+        "hook_modes": hook_modes,
+        "config_profile_ids": [entry["id"] for entry in config_entries],
+        "selector_tuples": list(plans),
     }
 
 
@@ -164,40 +229,88 @@ def ensure_workflow_supply_chain(root: Path) -> None:
                 raise RepositoryError(f"unpinned action reference in {path}: {reference}")
 
 
-def workflow_release_options(path: Path) -> List[str]:
+def workflow_selector_options(path: Path, label: str) -> List[str]:
     content = read_text(path)
-    match = OPTIONS_BLOCK_RE.search(content)
+    escaped_label = re.escape(label)
+    block_re = re.compile(
+        rf"^\s*# BEGIN GENERATED {escaped_label} OPTIONS\s*$"
+        rf"(?P<options>.*?)"
+        rf"^\s*# END GENERATED {escaped_label} OPTIONS\s*$",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = block_re.search(content)
     if not match:
-        raise RepositoryError("dispatch workflow lacks the generated release options block")
+        raise RepositoryError(f"dispatch workflow lacks the generated {label.lower()} options block")
     options: List[str] = []
     for line in match.group("options").splitlines():
         if not line.strip():
             continue
         option_match = OPTION_LINE_RE.fullmatch(line)
         if not option_match:
-            raise RepositoryError(f"invalid generated release option line: {line!r}")
+            raise RepositoryError(f"invalid generated {label.lower()} option line: {line!r}")
         options.append(option_match.group(1))
     if not options:
-        raise RepositoryError("dispatch workflow does not expose any release option")
+        raise RepositoryError(f"dispatch workflow does not expose any {label.lower()} option")
     return options
 
 
-def ensure_workflow_matches_registry(root: Path, release_ids: List[str]) -> None:
+def ensure_workflow_matches_registry(
+    root: Path,
+    release_ids: List[str],
+    root_provider_ids: List[str],
+    root_linkages: List[str],
+    hook_modes: List[str],
+    config_profile_ids: List[str],
+) -> None:
     dispatch_path = root / ".github" / "workflows" / "dispatch.yml"
-    options = workflow_release_options(dispatch_path)
-    if options != release_ids:
-        raise RepositoryError(
-            "dispatch release choices diverge from profiles/registry.json; "
-            f"workflow={options}, registry={release_ids}"
-        )
+    expected_options = {
+        "RELEASE": release_ids,
+        "ROOT PROVIDER": root_provider_ids,
+        "ROOT LINKAGE": root_linkages,
+        "HOOK MODE": hook_modes,
+        "CONFIG PROFILE": config_profile_ids,
+    }
+    for label, expected in expected_options.items():
+        options = workflow_selector_options(dispatch_path, label)
+        if options != expected:
+            raise RepositoryError(
+                f"dispatch {label.lower()} choices diverge from profiles/registry.json; "
+                f"workflow={options}, registry={expected}"
+            )
     dispatch = read_text(dispatch_path)
-    if "release_id:" not in dispatch or "target:" in dispatch:
-        raise RepositoryError("dispatch workflow must accept release_id rather than a target")
+    required_inputs = {
+        "release_id": "__select_release_id__",
+        "root_provider": "__select_root_provider__",
+        "root_linkage": "__select_root_linkage__",
+        "hook_mode": "__select_hook_mode__",
+        "config_profile": "__select_config_profile__",
+    }
+    for input_id, sentinel in required_inputs.items():
+        if not re.search(rf"(?m)^\s+{re.escape(input_id)}:\s*$", dispatch):
+            raise RepositoryError(f"dispatch workflow must accept {input_id}")
+        if f"default: {sentinel}" not in dispatch:
+            raise RepositoryError(f"dispatch {input_id} must require an explicit selection sentinel")
+    if not re.search(r"(?m)^\s+uname_suffix:\s*$", dispatch):
+        raise RepositoryError("dispatch workflow must accept optional uname_suffix")
+    if "default: \"\"" not in dispatch:
+        raise RepositoryError("dispatch uname_suffix must default to the empty append-only suffix")
+    if "target:" in dispatch or "features:" in dispatch:
+        raise RepositoryError("dispatch workflow must not accept legacy target or feature inputs")
     if not re.search(r"(?m)^\s*needs:\s*\[resolve, verify\]\s*$", dispatch):
         raise RepositoryError("build must wait for both resolve and static verification")
     resolve_workflow = read_text(root / ".github" / "workflows" / "resolve-plan.yml")
-    if "--release-id" not in resolve_workflow or "--target" in resolve_workflow:
-        raise RepositoryError("resolve workflow must pass a static release id to the resolver")
+    for argument in (
+        "--release-id",
+        "--root-provider",
+        "--root-linkage",
+        "--hook-mode",
+        "--config-profile",
+        "--uname-suffix",
+    ):
+        if argument not in resolve_workflow:
+            raise RepositoryError(f"resolve workflow must pass {argument} to the resolver")
+    if "--target" in resolve_workflow:
+        raise RepositoryError("resolve workflow must not pass a legacy target")
 
 
 def ensure_retired_sources_absent(root: Path) -> None:
@@ -239,18 +352,32 @@ def ensure_single_version_writer(root: Path) -> None:
         raise RepositoryError("the required version-contract writer is missing")
 
 
-def ensure_plan(plan_path: Path, root: Path, plans: Dict[str, Dict[str, Any]]) -> None:
+def ensure_plan(
+    plan_path: Path, root: Path, plans: Dict[Tuple[str, str, str, str, str], Dict[str, Any]]
+) -> None:
     plan = load_json(plan_path)
-    if not isinstance(plan, dict) or plan.get("schema") != 2:
-        raise RepositoryError("build plan must be a schema-2 object")
+    if not isinstance(plan, dict) or plan.get("schema") != 4:
+        raise RepositoryError("build plan must be a schema-4 object")
     selection = plan.get("selection")
     if not isinstance(selection, dict):
         raise RepositoryError("build plan selection is missing")
     release_id = selection.get("release_id")
-    if not isinstance(release_id, str) or release_id not in plans:
-        raise RepositoryError("build plan selects an unregistered release")
-    if selection.get("root") != "none" or selection.get("features") != []:
-        raise RepositoryError("P0 build plan must retain root=none and no optional features")
+    root_provider = selection.get("root_provider")
+    root_linkage = selection.get("root_linkage")
+    hook_mode = selection.get("hook_mode")
+    config_profile = selection.get("config_profile")
+    uname_suffix = selection.get("uname_suffix")
+    key = (release_id, root_provider, root_linkage, hook_mode, config_profile)
+    if not all(isinstance(value, str) for value in key) or key not in plans:
+        raise RepositoryError("build plan selects an unregistered selector tuple")
+    if not isinstance(uname_suffix, str):
+        raise RepositoryError("build plan uname_suffix must be a string")
+    root_plan = plan.get("root")
+    configuration = plan.get("configuration")
+    if not isinstance(root_plan, dict) or root_plan.get("id") != root_provider:
+        raise RepositoryError("build plan root does not match its selected root provider")
+    if not isinstance(configuration, dict) or configuration.get("id") != config_profile:
+        raise RepositoryError("build plan configuration does not match its selected config profile")
     version = plan.get("version")
     if not isinstance(version, dict):
         raise RepositoryError("build plan version contract is missing")
@@ -271,9 +398,21 @@ def ensure_plan(plan_path: Path, root: Path, plans: Dict[str, Dict[str, Any]]) -
             raise RepositoryError("boundary uname contract does not end with the ReNebula suffix")
     else:
         raise RepositoryError("build plan has an unsupported uname contract")
-    expected_plan = plans[release_id]
+    expected_plan = (
+        plans[key]
+        if uname_suffix == ""
+        else resolve_plan.resolve_plan(
+            root,
+            release_id,
+            root_provider,
+            root_linkage,
+            hook_mode,
+            config_profile,
+            uname_suffix,
+        )
+    )
     if canonical_json(plan) != canonical_json(expected_plan):
-        raise RepositoryError("build plan is not the exact deterministic result for its release")
+        raise RepositoryError("build plan is not the exact deterministic result for its selector tuple")
     try:
         raw = plan_path.read_bytes()
     except OSError as error:
@@ -300,7 +439,14 @@ def main(argv: List[str]) -> int:
         root = args.repo_root.resolve()
         context = ensure_registry_graph(root)
         ensure_workflow_supply_chain(root)
-        ensure_workflow_matches_registry(root, context["release_ids"])
+        ensure_workflow_matches_registry(
+            root,
+            context["release_ids"],
+            context["root_provider_ids"],
+            context["root_linkages"],
+            context["hook_modes"],
+            context["config_profile_ids"],
+        )
         ensure_retired_sources_absent(root)
         ensure_excluded_root_absent(root)
         ensure_single_version_writer(root)

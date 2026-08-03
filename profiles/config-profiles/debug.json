@@ -1,0 +1,7 @@
+{
+  "schema": 4,
+  "kind": "config-profile",
+  "id": "debug",
+  "ksu_debug": true,
+  "suffix_token": "debug"
+}

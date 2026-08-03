@@ -7,6 +7,7 @@ on:
       - locks/**
       - profiles/**
       - scripts/resolve_plan.py
+      - scripts/apply_root_adapter.py
       - scripts/sync_google_gki.py
       - scripts/validate_repository.py
       - scripts/verify_release.py
@@ -36,7 +37,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Resolve or restore the plan under test
+      - name: Restore and validate the caller-selected plan
+        if: inputs.plan_b64 != ''
         env:
           PLAN_B64: ${{ inputs.plan_b64 }}
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
@@ -45,45 +47,48 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -n "$PLAN_B64" ]; then
-            test -n "$PLAN_SHA256"
-            printf '%s' "$PLAN_B64" | base64 --decode > "$PLAN_PATH"
-            actual_sha256="$(sha256sum "$PLAN_PATH" | awk '{print $1}')"
-            if [ "$actual_sha256" != "$PLAN_SHA256" ]; then
-              echo "resolved plan digest mismatch" >&2
-              exit 1
-            fi
-          else
-            python3 scripts/resolve_plan.py \
-              --release-id android14-6.1-lts-2026-08-03 \
-              --output "$PLAN_PATH"
+          test -n "$PLAN_B64"
+          test -n "$PLAN_SHA256"
+          printf '%s' "$PLAN_B64" | base64 --decode > "$PLAN_PATH"
+          actual_sha256="$(sha256sum "$PLAN_PATH" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$PLAN_SHA256" ]; then
+            echo "resolved plan digest mismatch" >&2
+            exit 1
           fi
 
           test -s "$PLAN_PATH"
           python3 -m json.tool "$PLAN_PATH" >/dev/null
-          cp "$PLAN_PATH" "$GITHUB_WORKSPACE/build-plan.json"
+          python3 scripts/validate_repository.py --plan "$PLAN_PATH"
 
-      - name: Check resolver determinism, registry coverage, and rejected input
+      - name: Resolve every enabled selector tuple deterministically
         env:
-          FIRST_PLAN: ${{ github.workspace }}/build-plan.json
-          SECOND_PLAN: ${{ runner.temp }}/second-build-plan.json
+          PLANS_DIR: ${{ runner.temp }}/selector-plans
           INVALID_PLAN: ${{ runner.temp }}/invalid-build-plan.json
         shell: bash
         run: |
           set -euo pipefail
 
-          release_id="$(python3 - "$FIRST_PLAN" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as handle:
-              print(json.load(handle)["selection"]["release_id"])
-          PY
-          )"
-          python3 scripts/resolve_plan.py --release-id "$release_id" --output "$SECOND_PLAN"
-          cmp --silent "$FIRST_PLAN" "$SECOND_PLAN"
-
-          python3 - <<'PY'
+          mkdir -p "$PLANS_DIR"
+          while IFS=$'\t' read -r release_id root_provider root_linkage hook_mode config_profile; do
+            first_plan="$PLANS_DIR/${release_id}-${root_provider}-${root_linkage}-${hook_mode}-${config_profile}.first.json"
+            second_plan="$PLANS_DIR/${release_id}-${root_provider}-${root_linkage}-${hook_mode}-${config_profile}.second.json"
+            python3 scripts/resolve_plan.py \
+              --release-id "$release_id" \
+              --root-provider "$root_provider" \
+              --root-linkage "$root_linkage" \
+              --hook-mode "$hook_mode" \
+              --config-profile "$config_profile" \
+              --output "$first_plan"
+            python3 scripts/resolve_plan.py \
+              --release-id "$release_id" \
+              --root-provider "$root_provider" \
+              --root-linkage "$root_linkage" \
+              --hook-mode "$hook_mode" \
+              --config-profile "$config_profile" \
+              --output "$second_plan"
+            cmp --silent "$first_plan" "$second_plan"
+            python3 scripts/validate_repository.py --plan "$first_plan"
+          done < <(python3 - <<'PY'
           from pathlib import Path
           import sys
 
@@ -93,24 +98,28 @@ jobs:
           root = Path(".").resolve()
           registry, _ = resolve_plan.load_registry(root)
           for entry in registry["releases"]:
-              plan = resolve_plan.resolve_plan(root, entry["id"])
-              if plan["selection"]["family_id"] != entry["family_id"]:
-                  raise SystemExit(f"family mismatch for {entry['id']}")
+              family, _ = resolve_plan.load_family(root, entry["family_id"])
+              for root_provider, root_linkage, hook_mode, config_profile in resolve_plan.allowed_selector_combinations(family):
+                  print(f"{entry['id']}\t{root_provider}\t{root_linkage}\t{hook_mode}\t{config_profile}")
           PY
+          )
 
-          if python3 scripts/resolve_plan.py --release-id unregistered-release --output "$INVALID_PLAN"; then
-            echo "resolver accepted an unregistered release" >&2
+          if python3 scripts/resolve_plan.py \
+            --release-id unregistered-release \
+            --root-provider none \
+            --root-linkage none \
+            --hook-mode none \
+            --config-profile release \
+            --output "$INVALID_PLAN"; then
+            echo "resolver accepted an unregistered selector tuple" >&2
             exit 1
           fi
 
       - name: Run repository contract and unit tests
-        env:
-          PLAN_PATH: ${{ github.workspace }}/build-plan.json
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/validate_repository.py
-          python3 scripts/validate_repository.py --plan "$PLAN_PATH"
           python3 -m unittest discover -s tests -v
 
       - name: Enforce workflow supply-chain rules

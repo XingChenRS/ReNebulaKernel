@@ -1,11 +1,17 @@
 {
-  "schema": 2,
+  "schema": 4,
   "kind": "kmi-family",
   "id": "android17-6.18",
-  "roots": [
-    "none"
-  ],
-  "features": [],
+  "selector": {
+    "allowed_combinations": [
+      {
+        "root_provider": "none",
+        "root_linkage": "none",
+        "hook_mode": "none",
+        "config_profile": "release"
+      }
+    ]
+  },
   "build": {
     "adapter": "kleaf-defconfig-fragment-arm64-v1",
     "image_name": "Image",

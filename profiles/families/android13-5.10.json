@@ -1,11 +1,41 @@
 {
-  "schema": 2,
+  "schema": 4,
   "kind": "kmi-family",
   "id": "android13-5.10",
-  "roots": [
-    "none"
-  ],
-  "features": [],
+  "selector": {
+    "allowed_combinations": [
+      {
+        "root_provider": "none",
+        "root_linkage": "none",
+        "hook_mode": "none",
+        "config_profile": "release"
+      },
+      {
+        "root_provider": "resukisu",
+        "root_linkage": "lkm",
+        "hook_mode": "tracepoint",
+        "config_profile": "release"
+      },
+      {
+        "root_provider": "resukisu",
+        "root_linkage": "lkm",
+        "hook_mode": "tracepoint",
+        "config_profile": "debug"
+      },
+      {
+        "root_provider": "resukisu",
+        "root_linkage": "builtin",
+        "hook_mode": "tracepoint",
+        "config_profile": "release"
+      },
+      {
+        "root_provider": "resukisu",
+        "root_linkage": "builtin",
+        "hook_mode": "tracepoint",
+        "config_profile": "debug"
+      }
+    ]
+  },
   "build": {
     "adapter": "legacy-build-sh-arm64-v1",
     "image_name": "Image",

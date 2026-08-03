@@ -59,6 +59,11 @@ jobs:
           print(f"release_id={selection['release_id']}")
           print(f"lock_id={source['lock_id']}")
           print(f"adapter={build['adapter']}")
+          print(f"root_provider={selection['root_provider']}")
+          print(f"root_linkage={selection['root_linkage']}")
+          print(f"hook_mode={selection['hook_mode']}")
+          print(f"config_profile={selection['config_profile']}")
+          print(f"uname_suffix={selection['uname_suffix']}")
           print(f"image_name={build['image_name']}")
           print(f"bazel_target={build.get('bazel_target', '')}")
           print(f"build_config={build.get('build_config', '')}")
@@ -72,7 +77,15 @@ jobs:
           set -euo pipefail
           python3 scripts/sync_google_gki.py --lock-id "$LOCK_ID" --workspace "$GITHUB_WORKSPACE/kernel"
 
-      - name: Apply the single version contract
+      - name: Apply the locked root adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_root_adapter.py \
+            --plan "$GITHUB_WORKSPACE/build-plan.json" \
+            --kernel-workspace "$GITHUB_WORKSPACE/kernel"
+
+      - name: Apply the version and configuration contract
         env:
           ADAPTER: ${{ steps.plan.outputs.adapter }}
         shell: bash
@@ -144,6 +157,19 @@ jobs:
             --image "$image" \
             --record "$RUNNER_TEMP/build-record.json"
 
+      - name: Verify the selected root module
+        if: steps.plan.outputs.root_provider == 'resukisu' && steps.plan.outputs.root_linkage == 'lkm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t root_modules < <(find "$GITHUB_WORKSPACE/renebula-dist" -type f -name kernelsu.ko -print)
+          if [ "${#root_modules[@]}" -ne 1 ]; then
+            printf 'expected exactly one ReSukiSU LKM, found %s\n' "${#root_modules[@]}" >&2
+            printf '%s\n' "${root_modules[@]:-}" >&2
+            exit 1
+          fi
+          sha256sum "${root_modules[0]}" > "$RUNNER_TEMP/root-module.sha256"
+
       - name: Collect patch diagnostics
         if: always()
         shell: bash
@@ -166,6 +192,9 @@ jobs:
             ${{ runner.temp }}/build.log
             build-plan.json
             ${{ runner.temp }}/build-record.json
+            ${{ runner.temp }}/root-module.sha256
             ${{ runner.temp }}/patch-rejects.txt
             renebula-dist/Image
+            renebula-dist/**/kernelsu.ko
             kernel/renebula-source-record.json
+            kernel/renebula-root-record.json

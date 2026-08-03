@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "kind": "static-root-source-locks",
+  "locks": {
+    "resukisu.main.59c99fdf": {
+      "id": "resukisu.main.59c99fdf",
+      "provider": "resukisu",
+      "repository": "https://github.com/ReSukiSU/ReSukiSU.git",
+      "commit": "59c99fdf1735c37681ff18c7ffd7834741dcccbf",
+      "ref": "main",
+      "source_dir": "kernel",
+      "repository_license": "GPL-3.0",
+      "kernel_license": "GPL-2.0-only"
+    }
+  }
+}

@@ -20,11 +20,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MAKE_VERSION_RE = re.compile(r"^(VERSION|PATCHLEVEL|SUBLEVEL)\s*=\s*(\d+)\s*$")
 RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[^\s]+)?$")
 SUFFIX_RE = re.compile(r"^-[A-Za-z0-9._-]+$")
+UNAME_SUFFIX_RE = re.compile(r"^(?:|-[A-Za-z0-9][A-Za-z0-9._-]*)$")
+KCONFIG_SET_RE = re.compile(r"^CONFIG_([A-Z0-9_]+)=(y|m)$")
+KCONFIG_UNSET_RE = re.compile(r"^# CONFIG_([A-Z0-9_]+) is not set$")
 LINUX_VERSION_RE = re.compile(rb"Linux version ([^\x00\r\n\t ]+)")
 UTS_RELEASE_RE = re.compile(r'^#define\s+UTS_RELEASE\s+"([^"\s]+)"\s*$')
 KLEAF_FRAGMENT_ADAPTER = "kleaf-defconfig-fragment-arm64-v1"
 KLEAF_ADAPTERS = {KLEAF_FRAGMENT_ADAPTER}
 LEGACY_ADAPTER = "legacy-build-sh-arm64-v1"
+MAX_UTS_RELEASE_LENGTH = 64
 
 
 class ContractError(ValueError):
@@ -60,6 +64,13 @@ def require_string(container: Dict[str, Any], key: str, context: str) -> str:
     return value
 
 
+def require_optional_string(container: Dict[str, Any], key: str, context: str) -> str:
+    value = container.get(key)
+    if not isinstance(value, str):
+        raise ContractError(f"{context}.{key} must be a string")
+    return value
+
+
 def parse_base_release(makefile: Path) -> str:
     values: Dict[str, str] = {}
     try:
@@ -83,16 +94,123 @@ def validate_suffix(base_release: str, suffix: str) -> None:
         raise ContractError("local_suffix must not contain the complete base release")
     if not RELEASE_RE.fullmatch(base_release + suffix):
         raise ContractError("local_suffix produces an invalid release string")
+    if len(base_release + suffix) > MAX_UTS_RELEASE_LENGTH:
+        raise ContractError("local_suffix exceeds the UTS_RELEASE length limit")
 
 
-def validate_plan(plan: Dict[str, Any], observed_base_release: str) -> Tuple[str, str, Dict[str, str]]:
-    if plan.get("schema") != 2:
-        raise ContractError("plan.schema must be 2")
+def validate_uname_suffix(
+    base_release: str, managed_suffix: str, uname_suffix: str, local_suffix: str
+) -> None:
+    if not SUFFIX_RE.fullmatch(managed_suffix):
+        raise ContractError("managed_suffix must use only letters, digits, '.', '_', and '-'")
+    if base_release in managed_suffix:
+        raise ContractError("managed_suffix must not contain the complete base release")
+    if not UNAME_SUFFIX_RE.fullmatch(uname_suffix):
+        raise ContractError(
+            "uname_suffix must be empty or start with '-' and contain only "
+            "letters, digits, '.', '_', and '-'"
+        )
+    if base_release in uname_suffix:
+        raise ContractError("uname_suffix must not contain the complete Google base release")
+    if local_suffix != managed_suffix + uname_suffix:
+        raise ContractError("local_suffix must equal managed_suffix plus uname_suffix")
+
+
+def validate_kconfig_lines(configuration: Dict[str, Any]) -> List[str]:
+    lines = configuration.get("kconfig_lines")
+    if not isinstance(lines, list):
+        raise ContractError("plan.configuration.kconfig_lines must be an array")
+    result: List[str] = []
+    seen = set()
+    for index, line in enumerate(lines):
+        if not isinstance(line, str):
+            raise ContractError(f"plan.configuration.kconfig_lines[{index}] must be a string")
+        match = KCONFIG_SET_RE.fullmatch(line) or KCONFIG_UNSET_RE.fullmatch(line)
+        if match is None:
+            raise ContractError(
+                f"plan.configuration.kconfig_lines[{index}] must be a safe y/m/unset Kconfig line"
+            )
+        key = match.group(1)
+        if key in {"LOCALVERSION", "LOCALVERSION_AUTO"}:
+            raise ContractError("only the version contract may write LOCALVERSION configuration")
+        if key in seen:
+            raise ContractError(f"plan.configuration repeats Kconfig key: {key}")
+        seen.add(key)
+        result.append(line)
+    return result
+
+
+def validate_plan(
+    plan: Dict[str, Any], observed_base_release: str
+) -> Tuple[str, str, Dict[str, str], List[str]]:
+    if plan.get("schema") != 4:
+        raise ContractError("plan.schema must be 4")
     selection = plan.get("selection")
     if not isinstance(selection, dict):
         raise ContractError("plan.selection must be an object")
-    if selection.get("root") != "none" or selection.get("features") != []:
-        raise ContractError("P0 plan must retain root=none and no optional features")
+    root_provider = require_string(selection, "root_provider", "plan.selection")
+    root_linkage = require_string(selection, "root_linkage", "plan.selection")
+    hook_mode = require_string(selection, "hook_mode", "plan.selection")
+    config_profile = require_string(selection, "config_profile", "plan.selection")
+    selected_uname_suffix = require_optional_string(selection, "uname_suffix", "plan.selection")
+    root = plan.get("root")
+    if not isinstance(root, dict):
+        raise ContractError("plan.root must be an object")
+    if require_string(root, "id", "plan.root") != root_provider:
+        raise ContractError("plan.root.id must match plan.selection.root_provider")
+    if require_string(root, "linkage", "plan.root") != root_linkage:
+        raise ContractError("plan.root.linkage must match plan.selection.root_linkage")
+    if require_string(root, "hook_mode", "plan.root") != hook_mode:
+        raise ContractError("plan.root.hook_mode must match plan.selection.hook_mode")
+    configuration = plan.get("configuration")
+    if not isinstance(configuration, dict):
+        raise ContractError("plan.configuration must be an object")
+    if require_string(configuration, "id", "plan.configuration") != config_profile:
+        raise ContractError("plan.configuration.id must match plan.selection.config_profile")
+    kconfig_lines = validate_kconfig_lines(configuration)
+    if root_provider == "none":
+        if require_string(root, "adapter", "plan.root") != "none":
+            raise ContractError("root=none must use adapter=none")
+        if root.get("source_lock") is not None or root.get("source") is not None:
+            raise ContractError("root=none must not carry a root source")
+        if (
+            root_linkage != "none"
+            or hook_mode != "none"
+            or config_profile != "release"
+            or kconfig_lines
+            or require_string(configuration, "resolved_id", "plan.configuration") != "none"
+        ):
+            raise ContractError("root=none must use the empty release configuration")
+    elif root_provider == "resukisu":
+        if require_string(root, "adapter", "plan.root") != "resukisu-driver-link-v1":
+            raise ContractError("ReSukiSU must use the locked driver-link adapter")
+        require_string(root, "source_lock", "plan.root")
+        source = root.get("source")
+        if not isinstance(source, dict):
+            raise ContractError("ReSukiSU root plan must include locked source provenance")
+        for key in ("repository", "commit", "ref"):
+            require_string(source, key, "plan.root.source")
+        if root_linkage not in {"lkm", "builtin"} or hook_mode != "tracepoint":
+            raise ContractError("ReSukiSU must use lkm/builtin with the Tracepoint hook")
+        required = {
+            f"CONFIG_KSU={'m' if root_linkage == 'lkm' else 'y'}",
+            "CONFIG_KSU_TRACEPOINT_HOOK=y",
+            "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y",
+        }
+        disabled_hook_modes = {"# CONFIG_KSU_MANUAL_HOOK is not set", "# CONFIG_KSU_SUSFS is not set"}
+        if config_profile == "release":
+            expected_lines = required | disabled_hook_modes | {"# CONFIG_KSU_DEBUG is not set"}
+        elif config_profile == "debug":
+            expected_lines = required | disabled_hook_modes | {"CONFIG_KSU_DEBUG=y"}
+        else:
+            raise ContractError("ReSukiSU configuration profile is unsupported")
+        if set(kconfig_lines) != expected_lines:
+            raise ContractError("ReSukiSU configuration does not match its locked profile")
+        expected_resolved_id = f"resukisu-{root_linkage}-{hook_mode}-{config_profile}"
+        if require_string(configuration, "resolved_id", "plan.configuration") != expected_resolved_id:
+            raise ContractError("ReSukiSU configuration resolved id is inconsistent")
+    else:
+        raise ContractError(f"unsupported root provider: {root_provider}")
     version = plan.get("version")
     if not isinstance(version, dict):
         raise ContractError("plan.version must be an object")
@@ -102,6 +220,13 @@ def validate_plan(plan: Dict[str, Any], observed_base_release: str) -> Tuple[str
             f"source base release is {observed_base_release}, plan locks {expected_base_release}"
         )
     suffix = require_string(version, "local_suffix", "plan.version")
+    managed_suffix = require_string(version, "managed_suffix", "plan.version")
+    version_uname_suffix = require_optional_string(version, "uname_suffix", "plan.version")
+    if version_uname_suffix != selected_uname_suffix:
+        raise ContractError("plan.version.uname_suffix must match plan.selection.uname_suffix")
+    validate_uname_suffix(
+        observed_base_release, managed_suffix, version_uname_suffix, suffix
+    )
     validate_suffix(observed_base_release, suffix)
     release_contract = version.get("release_contract")
     if not isinstance(release_contract, dict):
@@ -128,7 +253,7 @@ def validate_plan(plan: Dict[str, Any], observed_base_release: str) -> Tuple[str
         )
         if expected_release != observed_base_release + suffix:
             raise ContractError(
-                "exact uname contract must be base release plus the ReNebula suffix"
+                "exact uname contract must be base release plus the resolved suffix"
             )
     elif mode == "base-prefix-and-suffix":
         if adapter not in KLEAF_ADAPTERS:
@@ -136,18 +261,19 @@ def validate_plan(plan: Dict[str, Any], observed_base_release: str) -> Tuple[str
         if require_string(release_contract, "prefix", "plan.version.release_contract") != observed_base_release:
             raise ContractError("Kleaf uname contract prefix must be the Makefile base release")
         if require_string(release_contract, "suffix", "plan.version.release_contract") != suffix:
-            raise ContractError("Kleaf uname contract suffix must be the ReNebula suffix")
+            raise ContractError("Kleaf uname contract suffix must be the resolved suffix")
     else:
         raise ContractError(f"unsupported uname contract mode: {mode}")
-    return suffix, adapter, release_contract
+    return suffix, adapter, release_contract, kconfig_lines
 
 
-def write_fragment(path: Path, suffix: str) -> None:
+def write_fragment(path: Path, suffix: str, kconfig_lines: List[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (
         "# Generated by scripts/verify_release.py; do not hand-edit.\n"
         f'CONFIG_LOCALVERSION="{suffix}"\n'
         "# CONFIG_LOCALVERSION_AUTO is not set\n"
+        + "".join(f"{line}\n" for line in kconfig_lines)
     )
     path.write_text(content, encoding="utf-8", newline="\n")
 
@@ -161,7 +287,19 @@ def write_build_file(path: Path) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def write_legacy_script(path: Path, suffix: str) -> None:
+def legacy_config_command(line: str) -> str:
+    match = KCONFIG_SET_RE.fullmatch(line)
+    if match:
+        key, value = match.groups()
+        operation = "-e" if value == "y" else "-m"
+        return f'"$kernel_dir/scripts/config" --file "$config_path" {operation} {key}\n'
+    match = KCONFIG_UNSET_RE.fullmatch(line)
+    if match:
+        return f'"$kernel_dir/scripts/config" --file "$config_path" -d {match.group(1)}\n'
+    raise ContractError(f"unsafe Kconfig line: {line}")
+
+
+def write_legacy_script(path: Path, suffix: str, kconfig_lines: List[str]) -> None:
     """Write a deterministic post-defconfig editor for the legacy build.sh adapter."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +313,8 @@ def write_legacy_script(path: Path, suffix: str) -> None:
         'out_dir="$(dirname \"$config_path\")"\n'
         '"$kernel_dir/scripts/config" --file "$config_path" '
         f'-d LOCALVERSION_AUTO --set-str LOCALVERSION "{suffix}"\n'
-        'make -C "$kernel_dir" O="$out_dir" olddefconfig\n'
+        + "".join(legacy_config_command(line) for line in kconfig_lines)
+        + 'make -C "$kernel_dir" O="$out_dir" olddefconfig\n'
     )
     path.write_text(content, encoding="utf-8", newline="\n")
     path.chmod(path.stat().st_mode | 0o111)
@@ -228,6 +367,8 @@ def validate_observed_release(
     suffix: str,
     release_contract: Dict[str, str],
 ) -> None:
+    if len(actual_release) > MAX_UTS_RELEASE_LENGTH:
+        raise ContractError("observed release exceeds the UTS_RELEASE length limit")
     mode = release_contract["mode"]
     if mode == "exact":
         expected_release = release_contract["expected_uname_release"]
@@ -261,12 +402,21 @@ def write_record(
     release_contract: Dict[str, str],
     observed_release: Optional[str],
     image: Optional[Path],
+    selection: Dict[str, Any],
 ) -> None:
     record: Dict[str, Any] = {
-        "schema": 2,
+        "schema": 4,
         "plan_sha256": sha256(plan),
         "observed_base_release": base_release,
         "release_contract": release_contract,
+        "selection": {
+            "release_id": selection.get("release_id"),
+            "root_provider": selection.get("root_provider"),
+            "root_linkage": selection.get("root_linkage"),
+            "hook_mode": selection.get("hook_mode"),
+            "config_profile": selection.get("config_profile"),
+            "uname_suffix": selection.get("uname_suffix"),
+        },
     }
     if observed_release is not None:
         record["observed_uts_release"] = observed_release
@@ -299,7 +449,7 @@ def main(argv: List[str]) -> int:
     try:
         plan = load_json(args.plan)
         base_release = parse_base_release(args.makefile)
-        suffix, adapter, release_contract = validate_plan(plan, base_release)
+        suffix, adapter, release_contract, kconfig_lines = validate_plan(plan, base_release)
         wants_kleaf_fragment_files = (
             args.write_fragment is not None or args.write_build_file is not None
         )
@@ -317,11 +467,11 @@ def main(argv: List[str]) -> int:
         ):
             raise ContractError("legacy version injection requires both generated files")
         if args.write_fragment:
-            write_fragment(args.write_fragment, suffix)
+            write_fragment(args.write_fragment, suffix, kconfig_lines)
         if args.write_build_file:
             write_build_file(args.write_build_file)
         if args.write_legacy_script:
-            write_legacy_script(args.write_legacy_script, suffix)
+            write_legacy_script(args.write_legacy_script, suffix, kconfig_lines)
         if args.write_legacy_build_config:
             write_legacy_build_config(args.write_legacy_build_config)
         observed_release: Optional[str] = None
@@ -346,6 +496,7 @@ def main(argv: List[str]) -> int:
                 release_contract,
                 observed_release,
                 args.image,
+                plan["selection"],
             )
     except ContractError as error:
         print(f"error: {error}", file=sys.stderr)

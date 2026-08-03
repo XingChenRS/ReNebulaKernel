@@ -1,0 +1,7 @@
+{
+  "schema": 4,
+  "kind": "config-profile",
+  "id": "release",
+  "ksu_debug": false,
+  "suffix_token": "release"
+}

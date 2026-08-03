@@ -1,0 +1,7 @@
+{
+  "schema": 4,
+  "kind": "root-provider",
+  "id": "resukisu",
+  "adapter": "resukisu-driver-link-v1",
+  "source_lock": "resukisu.main.59c99fdf"
+}

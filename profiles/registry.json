@@ -1,6 +1,6 @@
 {
-  "schema": 2,
-  "kind": "static-release-registry",
+  "schema": 4,
+  "kind": "static-selector-registry",
   "releases": [
     {
       "id": "android12-5.10-lts-2026-08-03",
@@ -49,6 +49,35 @@
       "family_id": "android17-6.18",
       "profile": "profiles/releases/android17-6.18-lts-2026-08-03.json",
       "state": "source-locked"
+    }
+  ],
+  "root_providers": [
+    {
+      "id": "none",
+      "profile": "profiles/root-providers/none.json"
+    },
+    {
+      "id": "resukisu",
+      "profile": "profiles/root-providers/resukisu.json"
+    }
+  ],
+  "root_linkages": [
+    "none",
+    "lkm",
+    "builtin"
+  ],
+  "hook_modes": [
+    "none",
+    "tracepoint"
+  ],
+  "config_profiles": [
+    {
+      "id": "release",
+      "profile": "profiles/config-profiles/release.json"
+    },
+    {
+      "id": "debug",
+      "profile": "profiles/config-profiles/debug.json"
     }
   ]
 }
