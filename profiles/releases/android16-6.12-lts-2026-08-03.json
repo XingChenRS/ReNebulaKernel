@@ -1,0 +1,12 @@
+{
+  "schema": 2,
+  "kind": "gki-release",
+  "id": "android16-6.12-lts-2026-08-03",
+  "family_id": "android16-6.12",
+  "source_lock": "gki.android16-6.12.lts.2026-08-03",
+  "state": "source-locked",
+  "version": {
+    "expected_base_release": "6.12.92",
+    "local_suffix": "-ReNebula-v2-a16-6.12-none"
+  }
+}

@@ -1,0 +1,171 @@
+name: Build ReNebula GKI Image
+
+on:
+  workflow_call:
+    inputs:
+      plan_b64:
+        description: Canonical build plan from resolve-plan.yml
+        required: true
+        type: string
+      plan_sha256:
+        description: SHA-256 of plan_b64 before encoding
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Locked Google GKI build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      PLAN_PATH: ${{ runner.temp }}/build-plan.json
+      DIST_DIR: ${{ runner.temp }}/renebula-dist
+      OUT_DIR: ${{ runner.temp }}/renebula-out
+    steps:
+      - name: Check out ReNebula definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Restore and validate the immutable plan
+        id: plan
+        env:
+          PLAN_B64: ${{ inputs.plan_b64 }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s' "$PLAN_B64" | base64 --decode > "$PLAN_PATH"
+          actual_sha256="$(sha256sum "$PLAN_PATH" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$PLAN_SHA256" ]; then
+            echo "build plan digest mismatch" >&2
+            exit 1
+          fi
+
+          python3 scripts/validate_repository.py --plan "$PLAN_PATH"
+
+          python3 - "$PLAN_PATH" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              plan = json.load(handle)
+
+          selection = plan["selection"]
+          source = plan["source"]
+          build = plan["build"]
+          print(f"release_id={selection['release_id']}")
+          print(f"lock_id={source['lock_id']}")
+          print(f"adapter={build['adapter']}")
+          print(f"image_name={build['image_name']}")
+          print(f"bazel_target={build.get('bazel_target', '')}")
+          print(f"build_config={build.get('build_config', '')}")
+          PY
+
+      - name: Synchronize the locked Google GKI source tree
+        env:
+          LOCK_ID: ${{ steps.plan.outputs.lock_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_google_gki.py --lock-id "$LOCK_ID" --workspace "$GITHUB_WORKSPACE/kernel"
+
+      - name: Apply the single version contract
+        env:
+          ADAPTER: ${{ steps.plan.outputs.adapter }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ADAPTER" in
+            kleaf-defconfig-fragment-arm64-v1)
+              python3 scripts/verify_release.py \
+                --plan "$PLAN_PATH" \
+                --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
+                --write-fragment "$GITHUB_WORKSPACE/kernel/renebula/localversion_defconfig" \
+                --write-build-file "$GITHUB_WORKSPACE/kernel/renebula/BUILD.bazel"
+              ;;
+            legacy-build-sh-arm64-v1)
+              python3 scripts/verify_release.py \
+                --plan "$PLAN_PATH" \
+                --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
+                --write-legacy-script "$GITHUB_WORKSPACE/kernel/renebula/apply-localversion.sh" \
+                --write-legacy-build-config "$GITHUB_WORKSPACE/kernel/renebula/localversion.build.config"
+              ;;
+            *)
+              echo "unsupported build adapter: $ADAPTER" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build the Kleaf arm64 GKI Image with a defconfig fragment
+        if: steps.plan.outputs.adapter == 'kleaf-defconfig-fragment-arm64-v1'
+        env:
+          BAZEL_TARGET: ${{ steps.plan.outputs.bazel_target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIST_DIR"
+          cd "$GITHUB_WORKSPACE/kernel"
+          tools/bazel run --defconfig_fragment=//renebula:localversion_defconfig \
+            "$BAZEL_TARGET" -- --destdir="$DIST_DIR" 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Build the legacy arm64 GKI Image
+        if: steps.plan.outputs.adapter == 'legacy-build-sh-arm64-v1'
+        env:
+          BUILD_CONFIG: ${{ steps.plan.outputs.build_config }}
+          BUILD_CONFIG_FRAGMENTS: renebula/localversion.build.config
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIST_DIR" "$OUT_DIR"
+          cd "$GITHUB_WORKSPACE/kernel"
+          BUILD_CONFIG="$BUILD_CONFIG" \
+            BUILD_CONFIG_FRAGMENTS="$BUILD_CONFIG_FRAGMENTS" \
+            OUT_DIR="$OUT_DIR" \
+            DIST_DIR="$DIST_DIR" \
+            build/build.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Verify the release embedded in the Image
+        env:
+          IMAGE_NAME: ${{ steps.plan.outputs.image_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$DIST_DIR/$IMAGE_NAME"
+          test -f "$image"
+          python3 scripts/verify_release.py \
+            --plan "$PLAN_PATH" \
+            --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
+            --image "$image" \
+            --record "$RUNNER_TEMP/build-record.json"
+
+      - name: Collect patch diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "$GITHUB_WORKSPACE/kernel" ]; then
+            find "$GITHUB_WORKSPACE/kernel" -name '*.rej' -type f -print > "$RUNNER_TEMP/patch-rejects.txt"
+          else
+            : > "$RUNNER_TEMP/patch-rejects.txt"
+          fi
+
+      - name: Upload build provenance and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: renebula-${{ steps.plan.outputs.release_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/build-plan.json
+            ${{ runner.temp }}/build-record.json
+            ${{ runner.temp }}/patch-rejects.txt
+            ${{ runner.temp }}/renebula-dist/Image
+            ${{ github.workspace }}/kernel/renebula-source-record.json

@@ -1,0 +1,14 @@
+{
+  "schema": 2,
+  "kind": "kmi-family",
+  "id": "android13-5.10",
+  "roots": [
+    "none"
+  ],
+  "features": [],
+  "build": {
+    "adapter": "legacy-build-sh-arm64-v1",
+    "image_name": "Image",
+    "build_config": "common/build.config.gki.aarch64"
+  }
+}

@@ -1,0 +1,253 @@
+{
+  "schema": 2,
+  "locks": {
+    "gki.android12-5.10.lts.2026-08-03": {
+      "id": "gki.android12-5.10.lts.2026-08-03",
+      "family_id": "android12-5.10",
+      "release_id": "android12-5.10-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "f35a23f32bd0f831b07036b5d5e9ac11e715868e",
+        "file": "default.xml",
+        "sha256": "06882f7842cada58d5d5d62a884f019ccb6a033139f94d78ebc3bbbf0ed9d88d"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "831e0375420f35d6191f9a571ff77cd2b0916613",
+        "manifest_ref": "refs/heads/common-android12-5.10-lts"
+      },
+      "materialization": {
+        "expected_project_count": 11,
+        "required_paths": [
+          "build",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "af99d873fab6c6ebc7c9d6905501ea17e1caa0fc"
+      },
+      "version": {
+        "expected_base_release": "5.10.260"
+      }
+    },
+    "gki.android13-5.10.lts.2026-08-03": {
+      "id": "gki.android13-5.10.lts.2026-08-03",
+      "family_id": "android13-5.10",
+      "release_id": "android13-5.10-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "ce3065b29941564ec45d2cd6214dc4ad6393058e",
+        "file": "default.xml",
+        "sha256": "0ccc004780842f1213a2d4070144ca3a8c0d175aa7f072ca0934a787d6e6e722"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "59c314402357483c3bee8692f3017d579667e4d5",
+        "manifest_ref": "refs/heads/common-android13-5.10-lts"
+      },
+      "materialization": {
+        "expected_project_count": 18,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "50b3a256e550e98ff6a49d32e77fb67998707961"
+      },
+      "version": {
+        "expected_base_release": "5.10.260"
+      }
+    },
+    "gki.android13-5.15.lts.2026-08-03": {
+      "id": "gki.android13-5.15.lts.2026-08-03",
+      "family_id": "android13-5.15",
+      "release_id": "android13-5.15-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "c8ba27bf6dffc15768ce051cea7446cefe905e35",
+        "file": "default.xml",
+        "sha256": "f883ab64418d0ffab29510fe52f33cceefdad1d9ff56666e634e9762612cb6cb"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "4ca01e380a16c2d6cdc54221f1490efc63f35e3f",
+        "manifest_ref": "refs/heads/common-android13-5.15-lts"
+      },
+      "materialization": {
+        "expected_project_count": 17,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "61d896ee2a8005c4e9d9da24421ba554601421be"
+      },
+      "version": {
+        "expected_base_release": "5.15.211"
+      }
+    },
+    "gki.android14-5.15.lts.2026-08-03": {
+      "id": "gki.android14-5.15.lts.2026-08-03",
+      "family_id": "android14-5.15",
+      "release_id": "android14-5.15-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "394feafa1a518773ef51d9de07425f358cfa155f",
+        "file": "default.xml",
+        "sha256": "371079dd2f4515fe6f986fda00ad02fb3a4646ac464e4d188b2f0450b065556f"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "87075d285a1c43588bdb77199efaca634ef89896",
+        "manifest_ref": "refs/heads/common-android14-5.15-lts"
+      },
+      "materialization": {
+        "expected_project_count": 17,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "b5e3fd7b7b21767405a1726552f1bb6c3377228c"
+      },
+      "version": {
+        "expected_base_release": "5.15.211"
+      }
+    },
+    "gki.android14-6.1.lts.2026-08-03": {
+      "id": "gki.android14-6.1.lts.2026-08-03",
+      "family_id": "android14-6.1",
+      "release_id": "android14-6.1-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "56e710cae04404a03e09b1afd1f8ae4346b9225f",
+        "file": "default.xml",
+        "sha256": "524d0955026b35c4a2fa1523294b0f324afb88989046799dac20b3a58a82d79a"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "4ed6f476bfce5310ae5e0c4badd37a9181f214de",
+        "manifest_ref": "refs/heads/common-android14-6.1-lts"
+      },
+      "materialization": {
+        "expected_project_count": 17,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "6a3a59b24b4005c03c0f287e4fa730124562faaa"
+      },
+      "version": {
+        "expected_base_release": "6.1.175"
+      }
+    },
+    "gki.android15-6.6.lts.2026-08-03": {
+      "id": "gki.android15-6.6.lts.2026-08-03",
+      "family_id": "android15-6.6",
+      "release_id": "android15-6.6-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "a669ea9178b4538fd7e701fee316c6531e5d6804",
+        "file": "default.xml",
+        "sha256": "c79ad39a4af63ef28b9f083b725b74681a120458a20a31052779cdbafb5de9d0"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "d1bd39646847abec087277ba2405cbd3ca1def90",
+        "manifest_ref": "refs/heads/common-android15-6.6-lts"
+      },
+      "materialization": {
+        "expected_project_count": 33,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "72d9552a905a6469ce3687023eec76ae21014021"
+      },
+      "version": {
+        "expected_base_release": "6.6.142"
+      }
+    },
+    "gki.android16-6.12.lts.2026-08-03": {
+      "id": "gki.android16-6.12.lts.2026-08-03",
+      "family_id": "android16-6.12",
+      "release_id": "android16-6.12-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "cd0692ac8a092d3fc2f6b58fab6b3d5d9a2f8cd8",
+        "file": "default.xml",
+        "sha256": "4060526eda969bdebc8ae6f07928bede733968dac208b2a14a4baa782f3e823f"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "36d01ab2c07a26fecddb590f6ddcbe7051a048da",
+        "manifest_ref": "refs/heads/common-android16-6.12-lts"
+      },
+      "materialization": {
+        "expected_project_count": 51,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "9cf86beb14562d97f14e0d80bbfdf1c5420a93d2"
+      },
+      "version": {
+        "expected_base_release": "6.12.92"
+      }
+    },
+    "gki.android17-6.18.lts.2026-08-03": {
+      "id": "gki.android17-6.18.lts.2026-08-03",
+      "family_id": "android17-6.18",
+      "release_id": "android17-6.18-lts-2026-08-03",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "144e13a87fc59365452c1630c9bdec7dbbeef50c",
+        "file": "default.xml",
+        "sha256": "eff760005bdae012f260f8ee3186b95269a94cdbfde35920c871c193fdf993d9"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "62eaee126cbc730e3b97cf9f9d553d894792392e",
+        "manifest_ref": "refs/heads/common-android17-6.18-lts"
+      },
+      "materialization": {
+        "expected_project_count": 58,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "4c9f09783a1de566b42d1432fa978c0f17b2525e"
+      },
+      "version": {
+        "expected_base_release": "6.18.32"
+      }
+    }
+  }
+}

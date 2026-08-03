@@ -1,0 +1,54 @@
+{
+  "schema": 2,
+  "kind": "static-release-registry",
+  "releases": [
+    {
+      "id": "android12-5.10-lts-2026-08-03",
+      "family_id": "android12-5.10",
+      "profile": "profiles/releases/android12-5.10-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android13-5.10-lts-2026-08-03",
+      "family_id": "android13-5.10",
+      "profile": "profiles/releases/android13-5.10-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android13-5.15-lts-2026-08-03",
+      "family_id": "android13-5.15",
+      "profile": "profiles/releases/android13-5.15-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android14-5.15-lts-2026-08-03",
+      "family_id": "android14-5.15",
+      "profile": "profiles/releases/android14-5.15-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android14-6.1-lts-2026-08-03",
+      "family_id": "android14-6.1",
+      "profile": "profiles/releases/android14-6.1-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android15-6.6-lts-2026-08-03",
+      "family_id": "android15-6.6",
+      "profile": "profiles/releases/android15-6.6-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android16-6.12-lts-2026-08-03",
+      "family_id": "android16-6.12",
+      "profile": "profiles/releases/android16-6.12-lts-2026-08-03.json",
+      "state": "source-locked"
+    },
+    {
+      "id": "android17-6.18-lts-2026-08-03",
+      "family_id": "android17-6.18",
+      "profile": "profiles/releases/android17-6.18-lts-2026-08-03.json",
+      "state": "source-locked"
+    }
+  ]
+}

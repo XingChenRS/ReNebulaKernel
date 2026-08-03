@@ -1,0 +1,14 @@
+{
+  "schema": 2,
+  "kind": "kmi-family",
+  "id": "android17-6.18",
+  "roots": [
+    "none"
+  ],
+  "features": [],
+  "build": {
+    "adapter": "kleaf-defconfig-fragment-arm64-v1",
+    "image_name": "Image",
+    "bazel_target": "//common:kernel_aarch64_dist"
+  }
+}

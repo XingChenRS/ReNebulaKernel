@@ -2,158 +2,217 @@
 
 ## 目标与边界
 
-ReNebula v2 是一个纯 Google GKI 的可复现构建系统。它不再下载、替换或修补 Vivo 源码；每次构建都从 Google Kernel Manifest 取得目标源码，并记录所有实际使用的提交。
+ReNebula v2 是纯 Google GKI 的可复现构建系统。每一次构建都由固定的
+Google Kernel Manifest 与 superproject 提供源代码，并留下实际 checkout
+提交、构建后端、配置和产物版本的证据。
 
-WildKernels 是上游观察源和架构参考，**不是直接 vendoring 的代码源**：其主仓没有声明许可证，因此 v2 独立实现工作流、脚本与组合动作。xxz 的 Root/功能解耦模型可作为交互与校验思路参考。外部源代码、补丁和打包工具必须分别经过许可证审查并固定到完整 commit SHA。
+它不再下载、替换或修补 Vivo 源码；也不把 WildKernels、xxz 或其他 fork
+当作可直接导入的代码来源。WildKernels 仅是架构与行为的观察源：其根仓库
+未声明可供 ReNebula 直接复用的许可证，因此 v2 的工作流、脚本和组合逻辑
+必须独立实现。外部补丁、工具或 adapter 也必须先通过许可证审查并固定到完整
+commit SHA。
 
-首个可发布目标只覆盖：
+## 支持范围：完整 Google 链路，而非单一 6.1
 
-- Google GKI `android14-6.1`
-- `root=none`
-- 无可选补丁、无 AnyKernel3、无发布任务
-- 只生成并验证正常 `Image`
+“支持”首先指该 KMI 有完整、可锁定的 Google 源码和构建链路：
+manifest、superproject、`common`、所需构建项目和明确的构建入口都可被
+固定和核验。它不等同于宣称每一个快照都已经跑完 Image 验证；后者由独立的
+发布状态记录。
 
-后续按 `KernelSU-Next → SukiSU → SakiSU → 已验证的 SUSFS 组合` 逐项扩大，而不是一次恢复旧的全部功能。
+| Android 世代 | KMI family | 构建入口 | 后端 |
+|---|---|---|---|
+| Android 12 | `android12-5.10` | `build/build.sh` | `legacy-build-sh-arm64-v1` |
+| Android 13 | `android13-5.10` | `build/build.sh` | `legacy-build-sh-arm64-v1` |
+| Android 13 | `android13-5.15` | `build/build.sh` | `legacy-build-sh-arm64-v1` |
+| Android 14 | `android14-5.15` | `tools/bazel … //common:kernel_aarch64_dist` | `kleaf-defconfig-fragment-arm64-v1` |
+| Android 14 | `android14-6.1` | `tools/bazel … //common:kernel_aarch64_dist` | `kleaf-defconfig-fragment-arm64-v1` |
+| Android 15 | `android15-6.6` | `tools/bazel … //common:kernel_aarch64_dist` | `kleaf-defconfig-fragment-arm64-v1` |
+| Android 16 | `android16-6.12` | `tools/bazel … //common:kernel_aarch64_dist` | `kleaf-defconfig-fragment-arm64-v1` |
+| Android 17 | `android17-6.18` | `tools/bazel … //common:kernel_aarch64_dist` | `kleaf-defconfig-fragment-arm64-v1` |
 
-## 总体结构
+`android14-6.1` 是最先演练的示例和回归基线，而不是唯一目标。任何新快照只要
+满足相同的数据契约，就加入既有 family，而不复制一套工作流。
+
+发布状态至少分为：
+
+```text
+draft → source-locked → source-verified → image-verified
+```
+
+只有 `image-verified` 可以表述为已实际验证的 Image；`source-locked` 仅说明
+输入链路已被固定。状态升级必须留下关联的构建计划、日志、产物摘要和版本验收，
+不能因为分支存在或配置文件出现而自动发生。
+
+## 数据模型
+
+KMI family、具体 release 和源锁定是三个不同层次，禁止再把它们混成一个
+`target` 字符串。
+
+```text
+profiles/
+  registry.json                    # 唯一可选的静态 release_id 列表
+  families/
+    <family>.json                  # 稳定兼容性、源码布局、允许的构建后端
+  releases/
+    <release-id>.json              # family + 不可变 source lock + 验证状态
+  roots/                           # 未来 Root capability 声明
+  features/                        # 未来 feature capability 与互斥关系
+locks/
+  sources.lock.json                # manifest/superproject 根锁与派生源码证据
+```
+
+- `family_id` 描述 KMI 兼容性，例如 `android14-6.1`。
+- `release_id` 描述某一次不可变快照，例如
+  `android14-6.1-lts-2026-08-03`。
+- `lock_id` 指向该 release 的 manifest/superproject 根锁。
+
+每个锁定项必须固定 manifest commit、`default.xml` 摘要、superproject
+commit、manifest ref、预期 `common` 提交和基础版本。同步器从 manifest
+解析项目清单，再以 superproject 的 gitlink 验证每个项目的精确提交；实际
+materialize 的完整项目列表写入 provenance，而不是信任浮动 branch。
+
+## 不可变构建计划
+
+页面只暴露静态 `release_id`。解析器读取 registry、family、release 和锁文件，
+生成唯一的 `build-plan.json`；所有后续阶段只消费该计划。
+
+```json
+{
+  "schema": 2,
+  "selection": {
+    "family_id": "android14-6.1",
+    "release_id": "android14-6.1-lts-2026-08-03",
+    "state": "source-locked",
+    "root": "none",
+    "features": []
+  },
+  "source": {
+    "lock_id": "gki.android14-6.1.lts.2026-08-03",
+    "manifest_commit": "<locked sha>",
+    "superproject_commit": "<locked sha>"
+  },
+  "build": {
+    "adapter": "kleaf-defconfig-fragment-arm64-v1"
+  },
+  "version": {
+    "expected_base_release": "<locked value>",
+    "local_suffix": "-ReNebula-v2-a14-6.1-none",
+    "release_contract": {
+      "mode": "base-prefix-and-suffix",
+      "prefix": "<locked value>",
+      "suffix": "-ReNebula-v2-a14-6.1-none"
+    }
+  }
+}
+```
+
+解析器必须拒绝未知 release、未注册 family、未锁定来源、不匹配的 build
+adapter、冲突 capability 和任何直接提供的 URL、分支名或 shell 片段。
+`expected_base_release` 只是锁定断言；真正的基础版本仍必须在同步后从
+`common/Makefile` 重新解析并严格比对。
+
+Android 12 与 Android 13 5.10/5.15 共用 `legacy-build-sh-arm64-v1`：
+它以 `common/build.config.gki.aarch64` 调用 `build/build.sh`，导出
+`LOCALVERSION=`，再通过 post-defconfig configuration hook 写入唯一的
+ReNebula 后缀。Android 14+ 才使用生成 defconfig fragment 的
+`kleaf-defconfig-fragment-arm64-v1`。
 
 ```text
 workflow_dispatch
        |
        v
 dispatch.yml ──> resolve-plan.yml ──> build-plan.json
-                                            |
-                                            v
-                                      build.yml
-                                            |
-     +-------------------+------------------+--------------------+
-     |                   |                  |                    |
- source adapter      root adapter       feature adapters      package adapter
- Google manifest     none / ksun /      susfs / net / ...     Image first;
- + pinned refs       sukisu / sakisu                          packaging later
-     |                   |                  |                    |
-     +-------------------+------------------+--------------------+
-                                            |
-                                            v
-                            config fragments + patch preflight
-                                            |
-                                            v
-                              build + uname verification + provenance
+                                      |
+                                      +──> static verification gate
+                                      |
+                                      v
+                                   build.yml
+                                      |
+                 +---------------------------+---------------------------+
+                 |                                                       |
+                 v                                                       v
+      legacy-build-sh-arm64-v1                         kleaf-defconfig-fragment-arm64-v1
+      Android 12 + Android 13 / build/build.sh          Android 14+ / defconfig fragment
+                 |                                                       |
+                 +---------------------------+---------------------------+
+                                      |
+                                      v
+                   Image + uname verification + provenance record
 ```
 
-目录职责：
+构建 job 必须依赖解析与静态验证 job，不能在 gate 失败后仍开始同步源码。后端
+选择只能是计划中的 allowlist 值，不得由 workflow 动态拼装命令。
 
-```text
-.github/
-  workflows/
-    dispatch.yml               # 唯一人工入口，最小权限
-    resolve-plan.yml           # 输入解析、组合校验、生成不可变计划
-    build.yml                  # 仅消费计划，不重新解释用户输入
-    upstream-audit.yml         # 手动/定期记录上游变化，不自动合并
-  actions/
-    source-google-gki/         # Manifest 同步、deprecated fallback、source SHA 记录
-    root-*/                    # 每个 Root 方案一个独立 adapter
-    feature-*/                 # 每个可选特性一个独立 adapter
-    configure-kernel/          # 幂等写入 config fragment
-    version-contract/          # 唯一 uname/version 写者与验证器
-    patch-contract/            # preflight、apply、.rej 诊断
-    build-image/               # 正常 Image 构建
-    provenance/                # 产物来源与版本摘要
-profiles/
-  targets/                     # Android/GKI/patch-level/构建目标的 JSON profile
-  roots/                       # Root capability 声明
-  features/                    # 特性 capability 与互斥关系
-locks/
-  sources.lock.json            # 每个外部 Git 源的完整 commit SHA
-scripts/
-  resolve_plan.py              # 本地可测试的纯计划解析器
-  verify_release.py            # uname/version 断言
-```
+## P0、Root 与功能解耦
 
-## 不可变构建计划
+P0 对 registry 中每一个 release 均固定为：
 
-`resolve-plan.yml` 将页面输入转换为 `build-plan.json`。之后的步骤只读取这个文件，避免同一个输入在多个 YAML 中被重新解释。P0 的页面只暴露一个已锁定 target；Root 和特性要等对应 adapter 通过验证后才进入页面选项。
+- `root=none`
+- 无可选 feature、补丁、AnyKernel3 或发布任务
+- 只生成并验证正常的 arm64 GKI `Image`
 
-```json
-{
-  "schema": 1,
-  "target": "android14-6.1",
-  "root": "none",
-  "features": [],
-  "source": {
-    "lock_id": "google-gki-a14-6.1-p0",
-    "manifest_commit": "<locked sha>",
-    "common_commit": "<locked sha>"
-  },
-  "version": {
-    "expected_base_release": "<audited locked value>",
-    "local_suffix": "-ReNebula-v2-a14-6.1-none",
-    "expected_uname_release": "<expected_base_release><local_suffix>"
-  },
-  "locks": {
-    "root": null,
-    "susfs": null
-  }
-}
-```
+这让 KMI 覆盖、源锁定、构建后端和 uname 契约先被独立验证。未来的 Root 是
+单选 adapter，feature 是 capability-gated 集合；两者都必须由明确 profile
+声明兼容性，不能通过隐式默认值或自由组合开关接入。
 
-计划解析必须拒绝未知 target、未知 Root、未锁定来源、冲突特性和不支持的组合。页面输入不允许直接传 URL、分支名或任意 shell 片段。`expected_base_release` 只是锁定断言；真正的基础版本必须在源码同步后从 `common/Makefile` 重新解析并严格比对。
-
-## Root 与功能解耦
-
-Root 是单选，特性是 capability-gated 的集合：
-
-| Root | 初始状态 | SUSFS | KPM | 备注 |
-|---|---:|---:|---:|---|
-| `none` | 首发支持 | 否 | 否 | 纯 GKI 验证基线 |
-| `ksun` | 后续 | 待验证 | 否 | 使用固定 SHA 的 adapter |
-| `sukisu` | 后续 | 待验证 | 仅经 profile 明确允许 | 不隐式启用 builtin/KPM |
-| `sakisu` | 后续 | 单独 profile | 否 | 首先只支持 tracepoint 模式 |
-
-SakiSU 固定到 `XingChenRS/SakiSU@6f9672837b9359f8853f47e18e00261edbf6d31e`，在 P1 完成 `sakisu-tracepoint` 验证后才成为页面 Root 预选项。其 adapter 不能调用会 `git pull` 的上游 `setup.sh`，而应在 GKI checkout 根目录以 detached checkout 接入完整 Git 工作树：
-
-1. 将 `common/drivers/kernelsu` 链接至 `KernelSU/kernel`；
-2. 幂等加入 `obj-$(CONFIG_KSU) += kernelsu/`；
-3. 幂等加入 `source "drivers/kernelsu/Kconfig"`；
-4. 首个 SakiSU profile 固定 `CONFIG_KSU=y` 与 `CONFIG_KSU_TRACEPOINT_HOOK=y`。
-
-`CONFIG_KSU_TRACEPOINT_HOOK`、`CONFIG_KSU_MANUAL_HOOK` 和 `CONFIG_KSU_SUSFS` 在 SakiSU 中属于互斥选择。SakiSU + SUSFS 必须另建 `sakisu-susfs-inline` profile；不得把通用 SUSFS 配置叠加到 tracepoint profile，也不得复用 SukiSU 的 KPM 或 companion patch。
+SakiSU 的首个候选项是锁定源码的 `sakisu-tracepoint`：只在独立 adapter、
+许可证审查和组合测试通过后加入。它不是通用 SUSFS 或 KPM 的隐式开关。
+KernelSU-Next 明确不在 ReNebula 的范围内：不建立 adapter、profile、构建开关
+或兼容性承诺。
 
 ## uname 与版本契约
 
-版本只有一个写者：`version-contract` action。禁止改写 `scripts/setlocalversion`，禁止在多个步骤同时写 `CONFIG_LOCALVERSION`、构建时间或 artifact 名称。
+`common/Makefile` 是基础 release 的唯一来源。版本契约只有一个写入者，按所选
+构建后端加入以 `-` 开头的 ReNebula 后缀，绝不把基础版本再写入后缀。所有现代
+Kleaf 分支都可能自行写入 Google localversion；ReNebula 不删除、重写或伪造
+该段，也不会在 Image 证据出现前声明完整 uname 的精确值。
 
 ```text
-base_release          = 从已检出的 common/Makefile 解析 VERSION.PATCHLEVEL.SUBLEVEL
-local_suffix          = 仅以 '-' 开头的后缀，例如 -ReNebula-v2-a14-6.1-none
-expected_uname_release = base_release + local_suffix
-artifact_name         = ReNebula-v2_<target>_<base_release>_<root>_<features>_<source-sha>
+base_release           = common/Makefile 的 VERSION.PATCHLEVEL.SUBLEVEL
+local_suffix           = -ReNebula-v2-<family>-<root>
+legacy contract         = exact(base_release + local_suffix)
+A14+ Kleaf contract     = prefix(base_release) + suffix(local_suffix)
+observed Kleaf release  = base_release + Google localversion + local_suffix
 ```
 
-规则：
+- 不修改 `scripts/setlocalversion`；
+- 不允许多个步骤同时写 `CONFIG_LOCALVERSION`、版本文件或 artifact 名称；
+- Android 12 与 Android 13 5.10/5.15 的 legacy adapter 必须断言完整的
+  `base_release + local_suffix`；
+- Android 14+ 的 `kleaf-defconfig-fragment-arm64-v1` 使用
+  `base-prefix-and-suffix`：实际 release 必须以 `base_release` 开头、以
+  `local_suffix` 结尾，同时记录完整 Google localversion 段；
+- 只关闭后端明确不需要的动态 SCM 后缀，不能覆盖锁定 Google localversion；
+- 构建后从生成元数据和 Image 中的 `Linux version` 反向验证真实 release；
+- artifact 名称、构建时间和 `uname -r` 分开管理。
 
-- `base_release` 永远来自源码，不是页面输入；
-- `local_suffix` 必须以 `-` 开头，禁止携带 `base_release` 或空白；
-- 仅通过构建后端支持的 `CONFIG_LOCALVERSION` / config fragment 设置后缀，并显式关闭不需要的自动 SCM 后缀；
-- `uname -v` 的构建时间/构建号与 `uname -r` 分开管理；
-- 构建前计算预期 release，构建后从产物中的 `Linux version` 反向验证；
-- SUSFS 的运行时 `SPOOF_UNAME` 是独立功能，不能替代真实 `uname -r` 验收。
-
-xxz 当前 branding action 把完整 `kernel_version.sublevel` 写进 `scripts/setlocalversion`。该脚本输出本应只是附加后缀，而 Kbuild 已会拼接基础版本，因此会出现概念上的 `6.12.81` + `6.12.81-...` 重复。v2 的 contract 从结构上杜绝该类双写。
+xxz 的现有 branding 做法把完整 `kernel_version.sublevel` 写进
+`scripts/setlocalversion`。Kbuild 已经会拼接基础版本，这会形成类似
+`6.12.81` 与 `6.12.81-…` 的双前缀语义。v2 通过单写入者和“后缀不得包含
+base release”的规则从结构上禁止该问题。
 
 ## 来源、补丁与可观测性
 
-- `sources.lock.json` 必须固定 Google manifest、manifest XML 摘要、每个同步 project（至少 common、构建脚本、Kleaf/Bazel 依赖与预编译工具链）、Root、SUSFS、打包器和工具链的完整 SHA；构建摘要记录最终解析值。
-- 所有补丁先运行 preflight；关键补丁失败立即失败，绝不使用 `patch ... || true` 掩盖结果。
-- 失败时始终上传 `.rej`、受影响文件列表、`build-plan.json`、已解析 source SHA 与最后构建日志。
-- 初期不引入设备补丁、ABI export 删除、bypass 双镜像、BBRv3、CIFS、NTSync、DroidSpaces、BBG 或复杂缓存；每个能力只有在独立 profile 验证后才能加入。
-- `upstream-audit.yml` 只报告 WildKernels、xxz、SakiSU 的 SHA/变更摘要；不会自动同步或执行第三方脚本。
+- source lock 固定 Google 根锁，并将派生后的项目提交完整写入构建记录；
+- 每个外部补丁先做 preflight，关键失败必须立即失败，不能使用
+  `patch … || true` 掩盖结果；
+- 失败时保留 `.rej`、受影响文件、build plan、已解析 source SHA 和最后的
+  构建日志；
+- 初期不引入设备专用补丁、ABI/export 删除、模块 bypass、双镜像 bypass、
+  BBRv3、NTSync、DroidSpaces、BBG 或复杂缓存；
+- 上游审计仅报告 WildKernels、xxz、SakiSU 的固定 SHA 与变更摘要，不自动
+  同步、合并或执行第三方脚本。
 
-## 迁移阶段
+## 演进顺序
 
-1. **P0：纯 GKI** — 页面仅选 `android14-6.1`，固定 `root=none`、无特性；验证 source lock、Image、真实 uname 和诊断产物。
-2. **P1：Root adapters** — 依次加入 ksun、sukisu、sakisu-tracepoint；每个 adapter 有独立组合测试。
-3. **P2：受控特性** — 每个 Root/特性组合以 profile 声明，而非自由叠加；先验证再开放 SUSFS。
-4. **P3：打包与发布** — 仅在正常 Image 持续稳定后评估 AnyKernel3、boot image 和 release；保留对应许可证与 notices。
+1. **P0：多 KMI 纯 GKI 基线**：锁定并验证所有完整 Google 构建链路，先完成
+   `root=none` 的 source、Image、真实 uname 和 provenance 验收。
+2. **P1：Root adapters**：按独立 profile 引入已审查的 SakiSU 等方案；
+   每个 adapter 都有自己的 KMI 兼容矩阵与组合测试。
+3. **P2：受控 feature**：仅在明确 capability 和组合验证后开放 SUSFS 等功能，
+   不提供自由叠加。
+4. **P3：打包与发布**：仅在正常 Image 持续稳定后评估 AnyKernel3、boot image
+   和 release，并保留所需 notices。
 
-v2 的完成标准不是“覆盖更多开关”，而是每个可见选项都能追溯到锁定来源、明确兼容规则、唯一版本语义和可复现诊断。
+v2 的完成标准不是“有更多开关”，而是每一个可见选项都能追溯到锁定来源、明确
+兼容规则、唯一版本语义和可复现诊断。

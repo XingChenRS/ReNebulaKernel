@@ -1,0 +1,12 @@
+{
+  "schema": 2,
+  "kind": "gki-release",
+  "id": "android14-6.1-lts-2026-08-03",
+  "family_id": "android14-6.1",
+  "source_lock": "gki.android14-6.1.lts.2026-08-03",
+  "state": "source-locked",
+  "version": {
+    "expected_base_release": "6.1.175",
+    "local_suffix": "-ReNebula-v2-a14-6.1-none"
+  }
+}

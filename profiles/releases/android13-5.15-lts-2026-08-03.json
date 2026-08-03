@@ -1,0 +1,12 @@
+{
+  "schema": 2,
+  "kind": "gki-release",
+  "id": "android13-5.15-lts-2026-08-03",
+  "family_id": "android13-5.15",
+  "source_lock": "gki.android13-5.15.lts.2026-08-03",
+  "state": "source-locked",
+  "version": {
+    "expected_base_release": "5.15.211",
+    "local_suffix": "-ReNebula-v2-a13-5.15-none"
+  }
+}
