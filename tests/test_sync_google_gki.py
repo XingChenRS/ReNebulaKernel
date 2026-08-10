@@ -104,3 +104,62 @@ class SourceLockTests(unittest.TestCase):
   <project name="kernel/common" path="common" />
 </manifest>"""
             )
+
+    def test_audited_missing_linkfile_is_omitted_without_relaxing_other_links(self):
+        lock = valid_lock()
+        omitted_linkfile = {
+            "source": "common/.bazelignore",
+            "dest": ".bazelignore",
+        }
+        lock["materialization"]["known_missing_linkfiles"] = [omitted_linkfile]
+        sync_google_gki.validate_lock(lock, LOCK_ID)
+        projects, linkfiles = sync_google_gki.validate_manifest_layout(
+            lock,
+            b"""<manifest>
+  <superproject name="kernel/superproject" remote="aosp" />
+  <project name="kernel/build/kernel" path="build/kernel" />
+  <project name="kernel/common" path="common">
+    <linkfile src=".bazelignore" dest=".bazelignore" />
+  </project>
+</manifest>""",
+        )
+
+        self.assertEqual(len(projects), 2)
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "common").mkdir()
+            omitted = sync_google_gki.create_linkfiles(
+                linkfiles,
+                workspace,
+                lock["materialization"]["known_missing_linkfiles"],
+            )
+            verified_omitted = sync_google_gki.verify_linkfiles(
+                linkfiles,
+                workspace,
+                lock["materialization"]["known_missing_linkfiles"],
+            )
+
+            self.assertEqual(omitted, [omitted_linkfile])
+            self.assertEqual(verified_omitted, [omitted_linkfile])
+            self.assertFalse((workspace / ".bazelignore").exists())
+            with self.assertRaisesRegex(RuntimeError, "linkfile source is missing"):
+                sync_google_gki.create_linkfiles(
+                    [{"source": "common/Makefile", "dest": "Makefile"}],
+                    workspace,
+                    lock["materialization"]["known_missing_linkfiles"],
+                )
+
+    def test_known_missing_linkfile_must_be_declared_by_the_manifest(self):
+        lock = valid_lock()
+        lock["materialization"]["known_missing_linkfiles"] = [
+            {"source": "common/.bazelignore", "dest": ".bazelignore"}
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "known missing linkfile is not declared"):
+            sync_google_gki.validate_manifest_layout(
+                lock,
+                b"""<manifest>
+  <project name="kernel/build/kernel" path="build/kernel" />
+  <project name="kernel/common" path="common" />
+</manifest>""",
+            )

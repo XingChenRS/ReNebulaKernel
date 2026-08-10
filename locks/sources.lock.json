@@ -208,6 +208,12 @@
         "required_paths": [
           "build/kernel",
           "common"
+        ],
+        "known_missing_linkfiles": [
+          {
+            "source": "common/.bazelignore",
+            "dest": ".bazelignore"
+          }
         ]
       },
       "common": {

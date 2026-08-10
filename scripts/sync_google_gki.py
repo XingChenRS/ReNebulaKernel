@@ -177,6 +177,29 @@ def validate_lock(lock: Dict[str, Any], lock_id: str) -> None:
             raise LockError(f"duplicate required project path: {path}")
         seen_paths.add(path)
 
+    known_missing_linkfiles = materialization.get("known_missing_linkfiles", [])
+    if not isinstance(known_missing_linkfiles, list):
+        raise LockError(
+            f"{lock_id}.materialization.known_missing_linkfiles must be an array"
+        )
+    seen_missing_linkfiles = set()
+    seen_missing_destinations = set()
+    for index, linkfile in enumerate(known_missing_linkfiles):
+        context = f"{lock_id}.materialization.known_missing_linkfiles[{index}]"
+        if not isinstance(linkfile, dict) or set(linkfile) != {"source", "dest"}:
+            raise LockError(f"{context} must contain exactly source and dest")
+        source = require_string(linkfile, "source", context)
+        destination = require_string(linkfile, "dest", context)
+        validate_relative_path(source, f"{context}.source")
+        validate_relative_path(destination, f"{context}.dest")
+        pair = (source, destination)
+        if pair in seen_missing_linkfiles:
+            raise LockError(f"duplicate known missing linkfile: {source} -> {destination}")
+        if destination in seen_missing_destinations:
+            raise LockError(f"duplicate known missing linkfile destination: {destination}")
+        seen_missing_linkfiles.add(pair)
+        seen_missing_destinations.add(destination)
+
     common = lock.get("common")
     if not isinstance(common, dict):
         raise LockError(f"{lock_id}.common must be an object")
@@ -353,6 +376,16 @@ def validate_manifest_layout(lock: Dict[str, Any], content: bytes) -> Tuple[List
     missing = sorted(required_paths - paths)
     if missing:
         raise RuntimeError(f"manifest is missing required project path(s): {', '.join(missing)}")
+    declared_linkfiles = {
+        (linkfile["source"], linkfile["dest"]) for linkfile in linkfiles
+    }
+    for linkfile in lock["materialization"].get("known_missing_linkfiles", []):
+        pair = (linkfile["source"], linkfile["dest"])
+        if pair not in declared_linkfiles:
+            raise RuntimeError(
+                "known missing linkfile is not declared by the locked manifest: "
+                f"{linkfile['source']} -> {linkfile['dest']}"
+            )
     return projects, linkfiles
 
 
@@ -463,10 +496,40 @@ def verify_project(project: Dict[str, str], workspace: Path) -> Dict[str, str]:
     return {key: project[key] for key in ("path", "name", "url", "commit")}
 
 
-def create_linkfiles(linkfiles: List[Dict[str, str]], workspace: Path) -> None:
+def _known_missing_linkfile_pairs(
+    known_missing_linkfiles: List[Dict[str, str]],
+) -> set[Tuple[str, str]]:
+    return {
+        (linkfile["source"], linkfile["dest"])
+        for linkfile in known_missing_linkfiles
+    }
+
+
+def create_linkfiles(
+    linkfiles: List[Dict[str, str]],
+    workspace: Path,
+    known_missing_linkfiles: Optional[List[Dict[str, str]]] = None,
+) -> List[Dict[str, str]]:
+    known_missing_linkfiles = known_missing_linkfiles or []
+    known_missing = _known_missing_linkfile_pairs(known_missing_linkfiles)
+    omitted: List[Dict[str, str]] = []
+    observed_known_missing = set()
     for linkfile in linkfiles:
         source = workspace / linkfile["source"]
         destination = workspace / linkfile["dest"]
+        pair = (linkfile["source"], linkfile["dest"])
+        if pair in known_missing:
+            observed_known_missing.add(pair)
+            if source.exists() or source.is_symlink():
+                raise RuntimeError(
+                    f"known missing linkfile source now exists: {linkfile['source']}"
+                )
+            if destination.exists() or destination.is_symlink():
+                raise RuntimeError(
+                    f"known missing linkfile destination must be absent: {linkfile['dest']}"
+                )
+            omitted.append(linkfile)
+            continue
         if not source.exists():
             raise RuntimeError(f"linkfile source is missing: {linkfile['source']}")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -476,14 +539,41 @@ def create_linkfiles(linkfiles: List[Dict[str, str]], workspace: Path) -> None:
                 raise RuntimeError(f"refusing to replace existing linkfile: {linkfile['dest']}")
             continue
         destination.symlink_to(relative_source)
+    if observed_known_missing != known_missing:
+        raise RuntimeError("known missing linkfile is not present in the materialized manifest")
+    return omitted
 
 
-def verify_linkfiles(linkfiles: List[Dict[str, str]], workspace: Path) -> None:
+def verify_linkfiles(
+    linkfiles: List[Dict[str, str]],
+    workspace: Path,
+    known_missing_linkfiles: Optional[List[Dict[str, str]]] = None,
+) -> List[Dict[str, str]]:
+    known_missing_linkfiles = known_missing_linkfiles or []
+    known_missing = _known_missing_linkfile_pairs(known_missing_linkfiles)
+    omitted: List[Dict[str, str]] = []
+    observed_known_missing = set()
     for linkfile in linkfiles:
         source = workspace / linkfile["source"]
         destination = workspace / linkfile["dest"]
+        pair = (linkfile["source"], linkfile["dest"])
+        if pair in known_missing:
+            observed_known_missing.add(pair)
+            if source.exists() or source.is_symlink():
+                raise RuntimeError(
+                    f"known missing linkfile source now exists: {linkfile['source']}"
+                )
+            if destination.exists() or destination.is_symlink():
+                raise RuntimeError(
+                    f"known missing linkfile destination must be absent: {linkfile['dest']}"
+                )
+            omitted.append(linkfile)
+            continue
         if not destination.is_symlink() or destination.resolve() != source.resolve():
             raise RuntimeError(f"linkfile does not match manifest: {linkfile['dest']}")
+    if observed_known_missing != known_missing:
+        raise RuntimeError("known missing linkfile is not present in the materialized manifest")
+    return omitted
 
 
 def write_record(
@@ -492,6 +582,7 @@ def write_record(
     workspace: Path,
     projects: List[Dict[str, str]],
     linkfiles: List[Dict[str, str]],
+    omitted_linkfiles: List[Dict[str, str]],
 ) -> None:
     record = {
         "schema": 2,
@@ -505,6 +596,7 @@ def write_record(
         "common_commit": lock["common"]["commit"],
         "projects": projects,
         "linkfiles": linkfiles,
+        "omitted_linkfiles": omitted_linkfiles,
     }
     (workspace / "renebula-source-record.json").write_bytes(canonical_json(record) + b"\n")
 
@@ -526,15 +618,30 @@ def synchronize(lock_id: str, lock: Dict[str, Any], workspace: Path) -> None:
     projects, linkfiles = collect_inventory(lock, workspace)
     for project in projects:
         checkout_project(project, workspace / project["path"])
-    create_linkfiles(linkfiles, workspace)
+    create_linkfiles(
+        linkfiles,
+        workspace,
+        lock["materialization"].get("known_missing_linkfiles", []),
+    )
     verify(lock_id, lock, workspace)
 
 
 def verify(lock_id: str, lock: Dict[str, Any], workspace: Path) -> None:
     projects, linkfiles = collect_inventory(lock, workspace)
     verified_projects = [verify_project(project, workspace) for project in projects]
-    verify_linkfiles(linkfiles, workspace)
-    write_record(lock_id, lock, workspace, verified_projects, linkfiles)
+    omitted_linkfiles = verify_linkfiles(
+        linkfiles,
+        workspace,
+        lock["materialization"].get("known_missing_linkfiles", []),
+    )
+    write_record(
+        lock_id,
+        lock,
+        workspace,
+        verified_projects,
+        linkfiles,
+        omitted_linkfiles,
+    )
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:

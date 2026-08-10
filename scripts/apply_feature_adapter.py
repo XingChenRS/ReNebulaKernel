@@ -25,6 +25,15 @@ SUKISU_REJECTS = {
     "kernel/core/init.c.rej",
     "kernel/policy/app_profile.h.rej",
 }
+COMMON_SUSFS_REJECTS = {
+    "android14-6.1": {"fs/namespace.c.rej"},
+    "android16-6.12": {
+        "fs/exec.c.rej",
+        "fs/proc/base.c.rej",
+        "fs/proc/task_mmu.c.rej",
+        "security/selinux/hooks.c.rej",
+    },
+}
 
 
 class FeatureError(ValueError):
@@ -165,8 +174,121 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     except OSError as error:
         raise FeatureError(f"cannot read {path}: {error}") from error
     if content.count(old) != 1:
-        raise FeatureError(f"SukiSU SUSFS compatibility anchor drifted: {label}")
+        raise FeatureError(f"SUSFS compatibility anchor drifted: {label}")
     path.write_text(content.replace(old, new, 1), encoding="utf-8", newline="\n")
+
+
+def finish_common_susfs_reject_adapter(common: Path, family: str) -> None:
+    """Resolve only the rejects audited against the locked Google snapshots."""
+
+    expected_rejects = COMMON_SUSFS_REJECTS.get(family)
+    if expected_rejects is None:
+        raise FeatureError(f"SUSFS has no Google common reject adapter for {family}")
+    actual_rejects = {
+        path.relative_to(common).as_posix()
+        for path in common.rglob("*.rej")
+    }
+    if actual_rejects != expected_rejects:
+        raise FeatureError(
+            f"unexpected {family} Google common SUSFS reject set: {sorted(actual_rejects)}"
+        )
+
+    if family == "android14-6.1":
+        namespace = common / "fs" / "namespace.c"
+        replace_once(
+            namespace,
+            '#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n',
+            '#include <linux/mnt_idmapping.h>\n'
+            '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+            '#include <linux/susfs_def.h>\n'
+            '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n'
+            '#include "pnode.h"\n',
+            "android14-6.1 namespace SUSFS include",
+        )
+        replace_once(
+            namespace,
+            '#include "internal.h"\n#include <trace/hooks/blk.h>\n\n'
+            '/* Maximum number of mounts in a mount namespace */\n',
+            '#include "internal.h"\n#include <trace/hooks/blk.h>\n\n'
+            '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+            'extern bool susfs_is_current_ksu_domain(void);\n'
+            'extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n'
+            '#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n'
+            '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n'
+            '/* Maximum number of mounts in a mount namespace */\n',
+            "android14-6.1 namespace SUSFS declarations",
+        )
+    else:
+        replace_once(
+            common / "fs" / "exec.c",
+            '#include <linux/ksm.h>\n#include <linux/dma-buf.h>\n',
+            '#include <linux/ksm.h>\n'
+            '#ifdef CONFIG_KSU_SUSFS\n'
+            '#include <linux/susfs_def.h>\n'
+            '#endif\n'
+            '#include <linux/dma-buf.h>\n',
+            "android16-6.12 exec SUSFS include",
+        )
+        replace_once(
+            common / "fs" / "proc" / "base.c",
+            '#include <linux/cpufreq_times.h>\n#include <uapi/linux/lsm.h>\n',
+            '#include <linux/cpufreq_times.h>\n'
+            '#if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n'
+            '#include <linux/susfs_def.h>\n'
+            '#endif // #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n\n'
+            '#include <uapi/linux/lsm.h>\n',
+            "android16-6.12 proc base SUSFS include",
+        )
+        replace_once(
+            common / "fs" / "proc" / "task_mmu.c",
+            '\tstruct mem_size_stats mss = {};\n\n\tif (!vma_data_pages(vma))\n',
+            '\tstruct mem_size_stats mss = {};\n\n'
+            '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n'
+            '\tif (vma->vm_file) {\n'
+            '\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))\n'
+            '\t\t\treturn 0;\n'
+            '\t}\n'
+            '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\n'
+            '\tif (!vma_data_pages(vma))\n',
+            "android16-6.12 show_smap data-page rename",
+        )
+        replace_once(
+            common / "security" / "selinux" / "hooks.c",
+            'struct selinux_state selinux_state;\n\n/*\n',
+            'struct selinux_state selinux_state;\n'
+            '#ifdef CONFIG_KSU_SUSFS\n'
+            'extern struct selinux_policy *backup_sepolicy;\n'
+            'extern bool ksu_selinux_hide_running __read_mostly;\n'
+            'extern int security_context_to_sid_with_policy(struct selinux_policy *policy, const char *scontext, u32 scontext_len,\n'
+            '                                               u32 *sid, u32 def_sid, gfp_t gfp_flags);\n'
+            '#endif // #ifdef CONFIG_KSU_SUSFS\n\n'
+            '/*\n',
+            "android16-6.12 SELinux KMI comment",
+        )
+
+    for relative in sorted(expected_rejects):
+        (common / relative).unlink()
+
+
+def apply_common_susfs_patch(common: Path, patch: Path, family: str) -> str:
+    if family not in COMMON_SUSFS_REJECTS:
+        apply_git_patch(common, patch)
+        return "strict-git-apply"
+    process = subprocess.run(
+        ["git", "-C", str(common), "apply", "--reject", "--whitespace=fix", str(patch)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    print(process.stdout, end="")
+    if process.returncode != 1:
+        raise FeatureError(
+            f"locked {family} SUSFS patch must produce its audited Google common rejects"
+        )
+    finish_common_susfs_reject_adapter(common, family)
+    run(["git", "-C", str(common), "diff", "--check"])
+    return "audited-google-reject-adapter-v1"
 
 
 def finish_sukisu_reject_adapter(provider_checkout: Path) -> None:
@@ -270,7 +392,11 @@ def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
         if not source_path.is_file() or destination.exists():
             raise FeatureError(f"SUSFS source copy contract failed: {source_path} -> {destination}")
         shutil.copy2(source_path, destination)
-    apply_git_patch(common, checkout / "kernel_patches" / f"50_add_susfs_in_gki-{family}.patch")
+    kernel_patch_strategy = apply_common_susfs_patch(
+        common,
+        checkout / "kernel_patches" / f"50_add_susfs_in_gki-{family}.patch",
+        family,
+    )
     provider_patch = checkout / "kernel_patches" / "KernelSU" / "10_enable_susfs_for_ksu.patch"
     strategy = susfs_provider_strategy(provider)
     if strategy == "official-kernelsu-patch":
@@ -287,6 +413,7 @@ def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
         "source_lock": plan["features"]["susfs"]["source_lock"],
         "commit": source["commit"],
         "kernel_patch": f"50_add_susfs_in_gki-{family}.patch",
+        "kernel_patch_strategy": kernel_patch_strategy,
     }
 
 

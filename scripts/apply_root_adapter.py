@@ -227,13 +227,38 @@ def declare_kleaf_lkm_module(build_file: Path) -> None:
         content = build_file.read_text(encoding="utf-8")
     except OSError as error:
         raise AdapterError(f"cannot read Kleaf BUILD file {build_file}: {error}") from error
+    target_matches = list(
+        re.finditer(
+            r'^(?P<indent>[ \t]*)"kernel_aarch64": \{$',
+            content,
+            re.MULTILINE,
+        )
+    )
+    if len(target_matches) != 1:
+        raise AdapterError("Kleaf BUILD file must contain one kernel_aarch64 target config")
+    target = target_matches[0]
+    target_tail = content[target.end() :]
+    closing = re.search(
+        rf"^{re.escape(target.group('indent'))}\}},$",
+        target_tail,
+        re.MULTILINE,
+    )
+    if closing is None:
+        raise AdapterError("Kleaf kernel_aarch64 target config is not closed canonically")
+    block_start = target.end()
+    block_end = target.end() + closing.start()
+    block = content[block_start:block_end]
     if MODULE_OUT in content:
-        if content.count(MODULE_OUT) != 1 or len(KLEAF_MANAGED_MODULE_OUTS_RE.findall(content)) != 1:
+        if (
+            content.count(MODULE_OUT) != 1
+            or MODULE_OUT not in block
+            or len(KLEAF_MANAGED_MODULE_OUTS_RE.findall(block)) != 1
+        ):
             raise AdapterError("Kleaf BUILD file has a non-canonical KernelSU module declaration")
         return
-    matches = list(KLEAF_MODULE_OUTS_RE.finditer(content))
+    matches = list(KLEAF_MODULE_OUTS_RE.finditer(block))
     if len(matches) != 1:
-        raise AdapterError("Kleaf BUILD file must contain one arm64 module_implicit_outs anchor")
+        raise AdapterError("Kleaf kernel_aarch64 target must contain one module_implicit_outs anchor")
     match = matches[0]
     indent = match.group("indent")
     replacement = (
@@ -241,7 +266,9 @@ def declare_kleaf_lkm_module(build_file: Path) -> None:
         f'{indent}    "{MODULE_OUT}",\n'
         f"{indent}],"
     )
-    build_file.write_text(content[: match.start()] + replacement + content[match.end() :], encoding="utf-8", newline="\n")
+    start = block_start + match.start()
+    end = block_start + match.end()
+    build_file.write_text(content[:start] + replacement + content[end:], encoding="utf-8", newline="\n")
 
 
 def apply_provider(

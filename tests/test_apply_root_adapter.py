@@ -26,9 +26,11 @@ class RootAdapterTests(unittest.TestCase):
         (drivers / "Makefile").write_text("obj-y += base/\n", encoding="utf-8")
         (drivers / "Kconfig").write_text('menu "Drivers"\nendmenu\n', encoding="utf-8")
         (workspace / "common" / "BUILD.bazel").write_text(
-            "kernel_aarch64 = {\n"
-            '    "module_implicit_outs": get_gki_modules_list("arm64"),\n'
-            "}\n",
+            "define_common_kernels(target_configs = {\n"
+            '    "kernel_aarch64": {\n'
+            '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
+            "    },\n"
+            "})\n",
             encoding="utf-8",
         )
         return workspace
@@ -112,6 +114,33 @@ class RootAdapterTests(unittest.TestCase):
                 content = (workspace / "common" / "BUILD.bazel").read_text(encoding="utf-8")
                 self.assertEqual("drivers/kernelsu/kernelsu.ko" in content, expected)
                 self.assertEqual("module_out" in record, expected)
+
+    def test_kleaf_declaration_targets_only_kernel_aarch64_among_three_arm64_profiles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build_file = Path(temporary) / "BUILD.bazel"
+            build_file.write_text(
+                "define_common_kernels(target_configs = {\n"
+                '    "kernel_aarch64": {\n'
+                '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
+                "    },\n"
+                '    "kernel_aarch64_16k": {\n'
+                '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
+                "    },\n"
+                '    "kernel_aarch64_debug": {\n'
+                '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
+                "    },\n"
+                "})\n",
+                encoding="utf-8",
+            )
+            try:
+                apply_root_adapter.declare_kleaf_lkm_module(build_file)
+            except apply_root_adapter.AdapterError as error:
+                self.fail(f"locked Google BUILD shape must be supported: {error}")
+            content = build_file.read_text(encoding="utf-8")
+            self.assertEqual(content.count(apply_root_adapter.MODULE_OUT), 1)
+            kernel_block, remainder = content.split('    "kernel_aarch64_16k": {', 1)
+            self.assertIn(apply_root_adapter.MODULE_OUT, kernel_block)
+            self.assertNotIn(apply_root_adapter.MODULE_OUT, remainder)
 
     def test_plan_rejects_unknown_or_mismatched_variants(self):
         plan = resolve_plan.resolve_plan(self.REPO_ROOT, self.release_id(), "resukisu")
