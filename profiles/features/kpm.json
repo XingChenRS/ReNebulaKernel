@@ -4,6 +4,7 @@
   "id": "kpm",
   "adapter": "sukisu-kernelpatch-image-v1",
   "variant": "builtin-image",
+  "root_sources": ["sukisu"],
   "supported_series": ["5.10", "5.15", "6.1", "6.6", "6.12"],
   "source_lock": "kpm.main.c5f0785d",
   "provider_kconfig": {

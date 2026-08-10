@@ -29,30 +29,7 @@ MAKEFILE_LINE = "obj-$(CONFIG_KSU) += kernelsu/"
 KCONFIG_LINE = 'source "drivers/kernelsu/Kconfig"'
 KLEAF_FRAGMENT_ADAPTER = "kleaf-defconfig-fragment-arm64-v1"
 LEGACY_BUILD_ADAPTER = "legacy-build-sh-arm64-v1"
-MODULE_OUT = "drivers/kernelsu/kernelsu.ko"
 RESUKISU_KSU_SRC_ANCHOR = "KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))"
-KLEAF_MODULE_OUTS_RE = re.compile(
-    r'^(?P<indent>[ \t]*)"module_implicit_outs": get_gki_modules_list\("arm64"\),$',
-    re.MULTILINE,
-)
-KLEAF_MANAGED_MODULE_OUTS_RE = re.compile(
-    r'^(?P<indent>[ \t]*)"module_implicit_outs": get_gki_modules_list\("arm64"\) \+ \[\n'
-    r'(?P=indent)[ \t]{4}"drivers/kernelsu/kernelsu\.ko",\n'
-    r'(?P=indent)\],$',
-    re.MULTILINE,
-)
-KLEAF_DIRECT_MODULE_OUTS_RE = re.compile(
-    r'^(?P<indent>[ \t]*)module_implicit_outs = get_gki_modules_list\("arm64"\) '
-    r'\+ get_kunit_modules_list\("arm64"\),$',
-    re.MULTILINE,
-)
-KLEAF_DIRECT_MANAGED_MODULE_OUTS_RE = re.compile(
-    r'^(?P<indent>[ \t]*)module_implicit_outs = get_gki_modules_list\("arm64"\) '
-    r'\+ get_kunit_modules_list\("arm64"\) \+ \[\n'
-    r'(?P=indent)[ \t]{4}"drivers/kernelsu/kernelsu\.ko",\n'
-    r'(?P=indent)\],$',
-    re.MULTILINE,
-)
 
 
 class AdapterError(ValueError):
@@ -260,72 +237,6 @@ def pin_kleaf_ksu_src(kbuild: Path, source: Path) -> None:
     )
 
 
-def declare_kleaf_lkm_module(build_file: Path) -> None:
-    try:
-        content = build_file.read_text(encoding="utf-8")
-    except OSError as error:
-        raise AdapterError(f"cannot read Kleaf BUILD file {build_file}: {error}") from error
-    config_targets = list(
-        re.finditer(
-            r'^(?P<indent>[ \t]*)"kernel_aarch64": \{$',
-            content,
-            re.MULTILINE,
-        )
-    )
-    direct_targets = list(
-        re.finditer(
-            r'^common_kernel\(\n(?P<indent>[ \t]*)name = "kernel_aarch64",$',
-            content,
-            re.MULTILINE,
-        )
-    )
-    if len(config_targets) + len(direct_targets) != 1:
-        raise AdapterError("Kleaf BUILD file must contain one supported kernel_aarch64 target")
-    if config_targets:
-        target = config_targets[0]
-        closing_pattern = rf"^{re.escape(target.group('indent'))}\}},$"
-        anchor_re = KLEAF_MODULE_OUTS_RE
-        managed_re = KLEAF_MANAGED_MODULE_OUTS_RE
-        anchor_text = '"module_implicit_outs": get_gki_modules_list("arm64")'
-    else:
-        target = direct_targets[0]
-        closing_pattern = r"^\)$"
-        anchor_re = KLEAF_DIRECT_MODULE_OUTS_RE
-        managed_re = KLEAF_DIRECT_MANAGED_MODULE_OUTS_RE
-        anchor_text = (
-            'module_implicit_outs = get_gki_modules_list("arm64") '
-            '+ get_kunit_modules_list("arm64")'
-        )
-    target_tail = content[target.end() :]
-    closing = re.search(closing_pattern, target_tail, re.MULTILINE)
-    if closing is None:
-        raise AdapterError("Kleaf kernel_aarch64 target is not closed canonically")
-    block_start = target.end()
-    block_end = target.end() + closing.start()
-    block = content[block_start:block_end]
-    if MODULE_OUT in content:
-        if (
-            content.count(MODULE_OUT) != 1
-            or MODULE_OUT not in block
-            or len(managed_re.findall(block)) != 1
-        ):
-            raise AdapterError("Kleaf BUILD file has a non-canonical KernelSU module declaration")
-        return
-    matches = list(anchor_re.finditer(block))
-    if len(matches) != 1:
-        raise AdapterError("Kleaf kernel_aarch64 target must contain one module_implicit_outs anchor")
-    match = matches[0]
-    indent = match.group("indent")
-    replacement = (
-        f"{indent}{anchor_text} + [\n"
-        f'{indent}    "{MODULE_OUT}",\n'
-        f"{indent}],"
-    )
-    start = block_start + match.start()
-    end = block_start + match.end()
-    build_file.write_text(content[:start] + replacement + content[end:], encoding="utf-8", newline="\n")
-
-
 def apply_provider(
     lock: Dict[str, Any], kernel_workspace: Path, variant_id: str, build_adapter: str
 ) -> Dict[str, Any]:
@@ -339,14 +250,6 @@ def apply_provider(
     source = checkout / lock["source_dir"]
     if not (source / "Kbuild").is_file() or not (source / "Kconfig").is_file():
         raise AdapterError("locked provider has no supported kernel adapter layout")
-    if lock["provider"] == "resukisu" and build_adapter == KLEAF_FRAGMENT_ADAPTER:
-        pin_kleaf_ksu_src(source / "Kbuild", source)
-    drivers = kernel_workspace / "common" / "drivers"
-    if not drivers.is_dir():
-        raise AdapterError("GKI workspace lacks common/drivers")
-    create_symlink(drivers / "kernelsu", source)
-    add_line_once(drivers / "Makefile", MAKEFILE_LINE)
-    add_line_once(drivers / "Kconfig", KCONFIG_LINE, before_last_endmenu=True)
     record: Dict[str, Any] = {
         "provider": lock["provider"],
         "adapter": ROOT_ADAPTER,
@@ -357,15 +260,32 @@ def apply_provider(
         "ref": lock["ref"],
         "checkout": "KernelSU",
         "checkout_mode": "detached-commit",
-        "driver_link": "common/drivers/kernelsu",
-        "makefile_registration": MAKEFILE_LINE,
-        "kconfig_registration": KCONFIG_LINE,
     }
-    if lock["provider"] == "resukisu" and build_adapter == KLEAF_FRAGMENT_ADAPTER:
+    if variant_id == "lkm-module":
+        record["integration"] = "external-gki-ddk"
+        return record
+    if (
+        lock["provider"] == "resukisu"
+        and build_adapter == KLEAF_FRAGMENT_ADAPTER
+        and variant_id == "builtin-image"
+    ):
+        pin_kleaf_ksu_src(source / "Kbuild", source)
+    drivers = kernel_workspace / "common" / "drivers"
+    if not drivers.is_dir():
+        raise AdapterError("GKI workspace lacks common/drivers")
+    create_symlink(drivers / "kernelsu", source)
+    add_line_once(drivers / "Makefile", MAKEFILE_LINE)
+    add_line_once(drivers / "Kconfig", KCONFIG_LINE, before_last_endmenu=True)
+    record["integration"] = "in-tree-builtin"
+    record["driver_link"] = "common/drivers/kernelsu"
+    record["makefile_registration"] = MAKEFILE_LINE
+    record["kconfig_registration"] = KCONFIG_LINE
+    if (
+        lock["provider"] == "resukisu"
+        and build_adapter == KLEAF_FRAGMENT_ADAPTER
+        and variant_id == "builtin-image"
+    ):
         record["provider_metadata_adapter"] = "resukisu-kleaf-absolute-source-v1"
-    if variant_id == "lkm-module" and build_adapter == KLEAF_FRAGMENT_ADAPTER:
-        declare_kleaf_lkm_module(kernel_workspace / "common" / "BUILD.bazel")
-        record["module_out"] = MODULE_OUT
     return record
 
 

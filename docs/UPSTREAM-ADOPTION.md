@@ -14,17 +14,17 @@ ReNebulaKernel 从原始项目获取锁定源码或补丁，不复制第三方�
 | SukiSU | [SukiSU-Ultra/SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) | 精确 SHA | GPL-2.0-only |
 | ReSukiSU | [ReSukiSU/ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) | 精确 SHA | GPL-2.0-only |
 
-三者使用统一 GKI 接入边界：保留完整、非 shallow 的 Git checkout，将 provider 的 `kernel/` 接入 `common/drivers/kernelsu`，并由本仓库统一编译 Kconfig。KernelSU-Next 不在候选列表中。
+三者保留完整、非 shallow 的 Git checkout。Built-in 变体将 provider 的 `kernel/` 接入 `common/drivers/kernelsu` 并由 Google 构建系统编译；LKM 变体使用对应 KMI 的摘要锁定 GKI DDK 外部构建。KernelSU-Next 不在候选列表中。
 
 ## Feature 来源
 
 | Feature | 上游 | 锁定与适配 |
 |---|---|---|
 | SUSFS | [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) | 5.10 至 6.12 每个 KMI 分支分别锁定 commit；按 provider 使用官方补丁、原生接入或受审计的 Suki 适配。 |
-| KPM | [SukiSU-Ultra/SukiSU_KernelPatch_patch](https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch) | 锁定 commit，构建 `kpimg`/`kptools` 后对 built-in Image 显式后处理。 |
+| KPM | [SukiSU-Ultra/SukiSU_KernelPatch_patch](https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch) | 仅对 SukiSU built-in 准入：内核启用 `CONFIG_KPM=y` 桥接，外部 `kpimg` 保持 Android 模式，验收后再对 Image 显式后处理。 |
 | Vivo vermagic | 无外部源码 | 根据真实 Vivo 5.15/6.1 模块样本，将单独 `vivo` token 插入 module arch token 前。 |
 
-6.18 当前没有锁定的 SUSFS 分支，也未进入 KPM 准入矩阵，因此这两个开关在 6.18 被 resolver 拒绝。Vivo vermagic 只允许 5.10、5.15、6.1；6.6 及以上拒绝。
+当前锁定 ReSukiSU 源码只有对既有 KernelPatch 的检测，没有 `CONFIG_KPM` 和 `sukisu_kpm_*` 桥接符号；官方 KernelSU 同样没有这套桥接，因此不能套用 SukiSU 的 KernelPatch fork。6.18 当前没有锁定的 SUSFS 分支，也未进入 KPM 准入矩阵。Vivo vermagic 只允许 5.10、5.15、6.1；6.6 及以上拒绝。
 
 ## 观察来源
 

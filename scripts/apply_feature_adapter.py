@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -100,6 +101,8 @@ def validate_feature_scope(plan: Dict[str, Any], variant_id: str) -> Dict[str, b
         raise FeatureError("SUSFS is a built-in feature supported only through 6.12")
     if variant_features["kpm"] and (variant_id != "builtin-image" or series not in KPM_SERIES):
         raise FeatureError("KPM is a built-in Image feature supported only through 6.12")
+    if variant_features["kpm"] and provider != "sukisu":
+        raise FeatureError("KPM requires the SukiSU in-kernel bridge")
     if variant_features["vivo_vermagic"] and (
         variant_id != "lkm-module" or series not in VIVO_SERIES
     ):
@@ -417,21 +420,40 @@ def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     }
 
 
-def adapt_kpm_makefile(makefile: Path) -> None:
-    """Build only the KPM loader retained by this trimmed KernelPatch fork."""
-
+def adapt_kpm_source(makefile: Path, user_event: Path) -> None:
+    """Keep Android KPM mode while removing two stale AP-root callbacks."""
     try:
         content = makefile.read_text(encoding="utf-8")
     except OSError as error:
         raise FeatureError(f"cannot read KPM Makefile {makefile}: {error}") from error
-    legacy_android = "# ifdef ANDROID\n\tCFLAGS += -DANDROID\n# endif\n"
-    if content.count(legacy_android) != 1:
+    android_mode = "# ifdef ANDROID\n\tCFLAGS += -DANDROID\n# endif\n"
+    if content.count(android_mode) != 1:
         raise FeatureError("locked KPM Makefile Android compatibility anchor drifted")
-    replacement = (
-        "# ReNebula: this trimmed KPM provider excludes the legacy AP root path.\n"
-        "# CFLAGS += -DANDROID\n"
+    try:
+        events = user_event.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read KPM user-event source {user_event}: {error}") from error
+    stale_blocks = (
+        (
+            '    if (lib_strcmp(safe_event, "post-fs-data") == 0) {\n'
+            '        log_boot("post-fs-data: loading ap package config ...\\n");\n'
+            "        load_ap_package_config();\n"
+            "    }\n",
+            "    /* ReNebula: the trimmed KPM provider has no AP package loader. */\n",
+        ),
+        (
+            '    if (lib_strcmp(safe_event, "uid_listener") == 0 && lib_strcmp(safe_args, "package-list-updated") == 0) {\n'
+            "        int trust_rc = refresh_trusted_manager_state();\n"
+            '        log_boot("boot-completed: trusted manager refresh rc=%d\\n", trust_rc);\n'
+            "    }\n",
+            "    /* ReNebula: the trimmed KPM provider has no AP trust database. */\n",
+        ),
     )
-    makefile.write_text(content.replace(legacy_android, replacement, 1), encoding="utf-8", newline="\n")
+    for anchor, replacement in stale_blocks:
+        if events.count(anchor) != 1:
+            raise FeatureError("locked KPM AP-root callback anchor drifted")
+        events = events.replace(anchor, replacement, 1)
+    user_event.write_text(events, encoding="utf-8", newline="\n")
 
 
 def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
@@ -441,13 +463,16 @@ def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     checkout = checkout_locked(source, workspace / ".renebula-features" / "kpm", KPM_REPOSITORY)
     if not (checkout / "tools" / "Makefile").is_file() or not (checkout / "kernel" / "Makefile").is_file():
         raise FeatureError("locked KPM source lacks build inputs")
-    adapt_kpm_makefile(checkout / "kernel" / "Makefile")
+    adapt_kpm_source(
+        checkout / "kernel" / "Makefile",
+        checkout / "kernel" / "patch" / "common" / "user_event.c",
+    )
     return {
         "feature": "kpm",
         "source_lock": plan["features"]["kpm"]["source_lock"],
         "commit": source["commit"],
         "checkout": str(checkout),
-        "source_adapter": "trimmed-kpm-no-ap-root-v1",
+        "source_adapter": "sukisu-android-kpm-no-ap-callbacks-v1",
         "post_build": True,
     }
 
@@ -458,16 +483,59 @@ def patch_kpm_image(kptools: Path, kpimg: Path, image: Path, output: Path) -> Di
             raise FeatureError(f"{label} is missing: {path}")
     if output.exists():
         raise FeatureError(f"refusing to overwrite KPM output: {output}")
+    kpimg_listing = run([str(kptools), "-l", "-k", str(kpimg)])
+    if not re.search(r"(?m)^config=android,release$", kpimg_listing):
+        raise FeatureError("KPM payload must be built in Android release mode")
     output.parent.mkdir(parents=True, exist_ok=True)
     run([str(kptools), "-p", "-i", str(image), "-k", str(kpimg), "-o", str(output)])
     if not output.is_file() or output.stat().st_size == 0:
         raise FeatureError("kptools did not produce a patched Image")
+    image_listing = run([str(kptools), "-l", "-i", str(output)])
+    if not re.search(r"(?m)^patched=true$", image_listing) or not re.search(
+        r"(?m)^config=android,release$", image_listing
+    ):
+        raise FeatureError("KPM output is not a verified patched Android KPM Image")
     return {
         "feature": "kpm",
         "input": str(image),
         "kpimg": str(kpimg),
         "output": str(output),
+        "verification": "patched-android-release",
     }
+
+
+def add_vivo_modinfo_token(modinfo: bytes) -> bytes:
+    fields = modinfo.split(b"\0")
+    vermagic_indexes = [index for index, field in enumerate(fields) if field.startswith(b"vermagic=")]
+    if len(vermagic_indexes) != 1:
+        raise FeatureError("module .modinfo must contain exactly one vermagic field")
+    index = vermagic_indexes[0]
+    parts = fields[index].split()
+    if parts[1:].count(b"vivo"):
+        raise FeatureError("module vermagic already contains a vivo token")
+    if parts[1:].count(b"aarch64") != 1:
+        raise FeatureError("module vermagic must contain exactly one aarch64 token")
+    arch_index = parts.index(b"aarch64")
+    parts.insert(arch_index, b"vivo")
+    fields[index] = b" ".join(parts)
+    return b"\0".join(fields)
+
+
+def patch_vivo_module(objcopy: Path, module: Path) -> Dict[str, str]:
+    if not objcopy.is_file() or not module.is_file():
+        raise FeatureError("Vivo module patching requires llvm-objcopy and kernelsu.ko")
+    with tempfile.TemporaryDirectory(prefix="renebula-vivo-") as temporary:
+        modinfo = Path(temporary) / "modinfo.bin"
+        run([str(objcopy), "--dump-section", f".modinfo={modinfo}", str(module)])
+        original = modinfo.read_bytes()
+        updated = add_vivo_modinfo_token(original)
+        modinfo.write_bytes(updated)
+        run([str(objcopy), "--update-section", f".modinfo={modinfo}", str(module)])
+    module_bytes = module.read_bytes()
+    matches = re.findall(rb"vermagic=([^\x00\r\n]+)", module_bytes)
+    if len(matches) != 1 or matches[0].split()[1:].count(b"vivo") != 1:
+        raise FeatureError("Vivo module vermagic update could not be verified")
+    return {"feature": "vivo_vermagic", "strategy": "elf-modinfo-token-v1", "module": str(module)}
 
 
 def prepare_features(plan: Dict[str, Any], variant_id: str, workspace: Path) -> Dict[str, Any]:
@@ -478,7 +546,7 @@ def prepare_features(plan: Dict[str, Any], variant_id: str, workspace: Path) -> 
     if scope["kpm"]:
         applied.append(prepare_kpm(plan, workspace))
     if scope["vivo_vermagic"]:
-        applied.append({"feature": "vivo_vermagic", **apply_vivo_vermagic(workspace / "common" / "include" / "linux" / "vermagic.h")})
+        applied.append({"feature": "vivo_vermagic", "strategy": "deferred-ddk-modinfo"})
     record = {"schema": 1, "variant_id": variant_id, "applied": applied}
     (workspace / "renebula-feature-record.json").write_bytes(canonical_json(record) + b"\n")
     return record
@@ -489,11 +557,17 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--variant-id", required=True)
     parser.add_argument("--kernel-workspace", type=Path, required=True)
-    parser.add_argument("--phase", choices=("prepare", "patch-kpm-image"), default="prepare")
+    parser.add_argument(
+        "--phase",
+        choices=("prepare", "patch-kpm-image", "patch-vivo-module"),
+        default="prepare",
+    )
     parser.add_argument("--image", type=Path)
     parser.add_argument("--output-image", type=Path)
     parser.add_argument("--kptools", type=Path)
     parser.add_argument("--kpimg", type=Path)
+    parser.add_argument("--module", type=Path)
+    parser.add_argument("--objcopy", type=Path)
     return parser.parse_args(argv)
 
 
@@ -505,13 +579,22 @@ def main(argv: List[str]) -> int:
         scope = validate_feature_scope(plan, args.variant_id)
         if args.phase == "prepare":
             prepare_features(plan, args.variant_id, workspace)
-        else:
+        elif args.phase == "patch-kpm-image":
             if not scope["kpm"]:
                 raise FeatureError("patch-kpm-image requires KPM on this variant")
             if None in (args.image, args.output_image, args.kptools, args.kpimg):
                 raise FeatureError("KPM Image patching requires image, output-image, kptools, and kpimg")
             record = patch_kpm_image(args.kptools, args.kpimg, args.image, args.output_image)
             (workspace / "renebula-kpm-record.json").write_bytes(canonical_json({"schema": 1, **record}) + b"\n")
+        else:
+            if not scope["vivo_vermagic"]:
+                raise FeatureError("patch-vivo-module requires Vivo vermagic on this variant")
+            if args.module is None or args.objcopy is None:
+                raise FeatureError("Vivo module patching requires module and objcopy")
+            record = patch_vivo_module(args.objcopy, args.module)
+            (workspace / "renebula-vivo-record.json").write_bytes(
+                canonical_json({"schema": 1, **record}) + b"\n"
+            )
     except (FeatureError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

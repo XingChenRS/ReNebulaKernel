@@ -239,6 +239,15 @@ def load_feature_profile(
         raise PlanError("feature profile must be a schema-5 build-feature")
     if require_string(profile, "id", "feature profile") != feature_id:
         raise PlanError("feature profile id does not match registry")
+    root_sources = profile.get("root_sources")
+    valid_root_sources = {"kernelsu", "sukisu", "resukisu"}
+    if (
+        not isinstance(root_sources, list)
+        or not root_sources
+        or len(root_sources) != len(set(root_sources))
+        or not set(root_sources).issubset(valid_root_sources)
+    ):
+        raise PlanError("feature profile.root_sources is invalid")
     return profile, path
 
 
@@ -291,6 +300,7 @@ def _validate_uname_tag(tag: str, expected_base_release: str) -> str:
 def _variant(
     variant_id: str,
     contract: Dict[str, Any],
+    family_id: str,
     root_source: str,
     request_features: Dict[str, bool],
     prefix: str,
@@ -323,11 +333,18 @@ def _variant(
         > MAX_UTS_RELEASE_LENGTH
     ):
         raise PlanError(f"uname_tag exceeds the 64-byte UTS_RELEASE limit for {variant_id}")
-    release_contract = {
-        "mode": "base-prefix-and-suffix",
-        "prefix": expected_base_release,
-        "suffix": local_suffix,
-    }
+    if variant_id == "lkm-module":
+        release_contract = {
+            "mode": "kmi-portable-module",
+            "kmi_family": family_id,
+            "kernel_series": ".".join(expected_base_release.split(".")[:2]),
+        }
+    else:
+        release_contract = {
+            "mode": "base-prefix-and-suffix",
+            "prefix": expected_base_release,
+            "suffix": local_suffix,
+        }
     return {
         "id": variant_id,
         "artifact": contract["artifact"],
@@ -376,6 +393,12 @@ def resolve_plan(
         feature_profiles[public_name] = profile
         feature_paths[public_name] = path
         if requested[public_name]:
+            if root_source not in profile["root_sources"]:
+                if public_name == "kpm":
+                    raise PlanError(
+                        "KPM requires SukiSU because only it provides the in-kernel KPM bridge"
+                    )
+                raise PlanError(f"{public_name} is not supported by root source {root_source}")
             if not family["features"][public_name] or family["kernel_series"] not in profile["supported_series"]:
                 if public_name == "vivo_vermagic":
                     raise PlanError("vivo_vermagic is supported only on kernel series 5.10, 5.15, or 6.1")
@@ -431,6 +454,7 @@ def resolve_plan(
         _variant(
             variant_id,
             contract,
+            entry["family_id"],
             root_source,
             requested,
             release["version"]["local_suffix_prefix"],

@@ -103,6 +103,50 @@ class VerifyReleaseTests(unittest.TestCase):
             self.assertEqual(data["selection"]["root_source"], "resukisu")
             self.assertTrue(data["selection"]["susfs"])
 
+    def test_ddk_lkm_uses_portable_kmi_vermagic_contract(self):
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_id(),
+            "resukisu",
+            vivo_vermagic=True,
+            uname_tag="MLXC_RENB",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan_path, makefile = self.write_inputs(root, plan)
+            module = root / "kernelsu.ko"
+            module.write_bytes(
+                b"vermagic=6.1.0-android14 SMP preempt mod_unload modversions vivo aarch64\0"
+            )
+
+            result = verify_release.main([
+                "--plan", str(plan_path), "--variant-id", "lkm-module",
+                "--makefile", str(makefile), "--module", str(module),
+            ])
+
+            self.assertEqual(result, 0)
+
+    def test_ddk_lkm_rejects_a_different_android_kmi_family(self):
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_id(),
+            "resukisu",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan_path, makefile = self.write_inputs(root, plan)
+            module = root / "kernelsu.ko"
+            module.write_bytes(
+                b"vermagic=6.1.0-android13 SMP preempt mod_unload modversions aarch64\0"
+            )
+
+            result = verify_release.main([
+                "--plan", str(plan_path), "--variant-id", "lkm-module",
+                "--makefile", str(makefile), "--module", str(module),
+            ])
+
+            self.assertEqual(result, 2)
+
     def test_unknown_variant_is_rejected(self):
         plan = resolve_plan.resolve_plan(self.REPO_ROOT, self.release_id(), "kernelsu")
         with self.assertRaises(verify_release.ContractError):

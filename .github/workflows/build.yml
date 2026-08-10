@@ -33,7 +33,7 @@ on:
         type: boolean
         default: false
       kpm:
-        description: 为 Built-in Image 执行锁定的 KPM 后处理；不影响 LKM，Android 17 / 6.18 暂不支持
+        description: 仅配合 SukiSU：启用内核 KPM 桥接并生成 Android KernelPatch Image；不影响 LKM，6.18 不支持
         required: true
         type: boolean
         default: false
@@ -153,6 +153,7 @@ jobs:
           selection = plan["selection"]
           build = plan["build"]
           print(f"release_id={selection['release_id']}")
+          print(f"family_id={selection['family_id']}")
           print(f"lock_id={plan['source']['lock_id']}")
           print(f"root_source={selection['root_source']}")
           print(f"adapter={build['adapter']}")
@@ -195,6 +196,7 @@ jobs:
             --phase prepare
 
       - name: 生成唯一的 Kconfig 与 LOCALVERSION 输入
+        if: steps.plan.outputs.artifact == 'image'
         shell: bash
         run: |
           set -euo pipefail
@@ -223,9 +225,60 @@ jobs:
           make -C "$kpm_dir/tools"
           test -s "$kpm_dir/kernel/kpimg"
           test -x "$kpm_dir/tools/kptools"
+          "$kpm_dir/tools/kptools" -l -k "$kpm_dir/kernel/kpimg" \
+            | grep -qx 'config=android,release'
+
+      - name: 使用锁定的 GKI DDK 构建 LKM
+        if: steps.plan.outputs.artifact == 'module'
+        env:
+          FAMILY_ID: ${{ steps.plan.outputs.family_id }}
+          ROOT_SOURCE: ${{ steps.plan.outputs.root_source }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$FAMILY_ID" in
+            android12-5.10) ddk_image='ghcr.io/ylarod/ddk-min@sha256:272ada1e61c525116032246df2a790d1ccec1804b7a9e0b09203c5e650dcb78e' ;;
+            android13-5.10) ddk_image='ghcr.io/ylarod/ddk-min@sha256:e5ce038ba38408ad26aae1f2622cfb44dfbf6634b025bf197aa08beac0794f5b' ;;
+            android13-5.15) ddk_image='ghcr.io/ylarod/ddk-min@sha256:9e68cd9fcab748584755d31ba88ef134efc938dbde17f258c2652315f6cd81cd' ;;
+            android14-5.15) ddk_image='ghcr.io/ylarod/ddk-min@sha256:bbf697a8fe995704268eef710921c9d2ea4f146954690d7ea97887f3a4014a6a' ;;
+            android14-6.1) ddk_image='ghcr.io/ylarod/ddk-min@sha256:1dd6ac340b627a90a4031d6d0df6b129d8cc949b139fb56032c898f023d3d5d3' ;;
+            android15-6.6) ddk_image='ghcr.io/ylarod/ddk-min@sha256:51159bc935c75a282fc65bc87e02f16bd098d1cdf55dc558c4fdd0fcf7a132e2' ;;
+            android16-6.12) ddk_image='ghcr.io/ylarod/ddk-min@sha256:4dd088dc94b391c926cf09215e0a5958f3dfe7d8eeed3616f9041224f85b1d1a' ;;
+            *) printf 'no locked GKI DDK image for %s\n' "$FAMILY_ID" >&2; exit 1 ;;
+          esac
+          test "$ROOT_SOURCE" != none
+          mkdir -p "$GITHUB_WORKSPACE/renebula-dist"
+          docker run --rm --privileged \
+            --volume "$GITHUB_WORKSPACE/kernel/KernelSU:/workspace/provider" \
+            --volume "$GITHUB_WORKSPACE/renebula-dist:/workspace/out" \
+            --workdir /workspace/provider/kernel \
+            "$ddk_image" \
+            bash -lc 'set -euo pipefail
+              git config --global --add safe.directory /workspace/provider
+              CONFIG_KSU=m CONFIG_KSU_MULTI_MANAGER_SUPPORT=y CONFIG_KSU_TRACEPOINT_HOOK=y CC=clang make
+              llvm-strip -d kernelsu.ko
+              cp kernelsu.ko /workspace/out/kernelsu.ko' \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
+          test -s "$GITHUB_WORKSPACE/renebula-dist/kernelsu.ko"
+          export DDK_IMAGE="$ddk_image"
+          export DDK_MODULE_SHA256="$(sha256sum "$GITHUB_WORKSPACE/renebula-dist/kernelsu.ko" | awk '{print $1}')"
+          python3 - "$GITHUB_WORKSPACE/kernel/renebula-ddk-record.json" <<'PY'
+          import json
+          import os
+          import sys
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump({
+                  "schema": 1,
+                  "adapter": "gki-ddk-external-module-v1",
+                  "family_id": os.environ["FAMILY_ID"],
+                  "image": os.environ["DDK_IMAGE"],
+                  "module_sha256_before_vivo": os.environ["DDK_MODULE_SHA256"],
+              }, handle, sort_keys=True, separators=(",", ":"))
+              handle.write("\n")
+          PY
 
       - name: 使用 Kleaf 构建 arm64 GKI
-        if: steps.plan.outputs.adapter == 'kleaf-defconfig-fragment-arm64-v1'
+        if: steps.plan.outputs.adapter == 'kleaf-defconfig-fragment-arm64-v1' && steps.plan.outputs.artifact == 'image'
         env:
           BAZEL_TARGET: ${{ steps.plan.outputs.bazel_target }}
         shell: bash
@@ -238,7 +291,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: 使用 legacy build.sh 构建 arm64 GKI
-        if: steps.plan.outputs.adapter == 'legacy-build-sh-arm64-v1'
+        if: steps.plan.outputs.adapter == 'legacy-build-sh-arm64-v1' && steps.plan.outputs.artifact == 'image'
         env:
           BUILD_CONFIG: ${{ steps.plan.outputs.build_config }}
           BUILD_CONFIG_FRAGMENTS: renebula/localversion.build.config
@@ -269,6 +322,17 @@ jobs:
             if [ "${#modules[@]}" -ne 1 ]; then
               printf 'expected exactly one kernelsu.ko, found %s\n' "${#modules[@]}" >&2
               exit 1
+            fi
+            if [ "${{ steps.plan.outputs.variant_vivo_vermagic }}" = "true" ]; then
+              objcopy="$(find "$GITHUB_WORKSPACE/kernel/prebuilts/clang/host/linux-x86" -type f -path '*/bin/llvm-objcopy' | sort -V | tail -n 1)"
+              test -x "$objcopy"
+              python3 scripts/apply_feature_adapter.py \
+                --plan "$GITHUB_WORKSPACE/build-plan.json" \
+                --variant-id "$VARIANT_ID" \
+                --kernel-workspace "$GITHUB_WORKSPACE/kernel" \
+                --phase patch-vivo-module \
+                --module "${modules[0]}" \
+                --objcopy "$objcopy"
             fi
             python3 scripts/verify_release.py \
               --plan "$GITHUB_WORKSPACE/build-plan.json" \
@@ -329,6 +393,8 @@ jobs:
             kernel/renebula-root-record.json
             kernel/renebula-feature-record.json
             kernel/renebula-kpm-record.json
+            kernel/renebula-vivo-record.json
+            kernel/renebula-ddk-record.json
             kernel/renebula/renebula-config-record.json
 
       - name: 上传失败日志
@@ -345,3 +411,5 @@ jobs:
             kernel/renebula-source-record.json
             kernel/renebula-root-record.json
             kernel/renebula-feature-record.json
+            kernel/renebula-vivo-record.json
+            kernel/renebula-ddk-record.json

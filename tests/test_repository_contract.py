@@ -68,7 +68,26 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("grep -qx '#define __aarch64__ 1'", workflow_text)
         self.assertIn('cp "$kpm_dir/kernel/include/preset.h" "$kpm_dir/tools/preset.h"', workflow_text)
         self.assertIn('cmp "$kpm_dir/kernel/include/preset.h" "$kpm_dir/tools/preset.h"', workflow_text)
+        self.assertIn('"$kpm_dir/tools/kptools" -l -k "$kpm_dir/kernel/kpimg"', workflow_text)
+        self.assertIn("grep -qx 'config=android,release'", workflow_text)
         self.assertNotIn('ln -s clang "$clang_bin/aarch64-linux-android35-clang"', workflow_text)
+
+    def test_lkm_uses_digest_locked_upstream_ddk_instead_of_in_tree_kleaf(self):
+        workflow_text = (self.REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("使用锁定的 GKI DDK 构建 LKM", workflow_text)
+        self.assertEqual(workflow_text.count("ghcr.io/ylarod/ddk-min@sha256:"), 7)
+        self.assertIn("docker run --rm --privileged", workflow_text)
+        self.assertIn("CONFIG_KSU=m CONFIG_KSU_MULTI_MANAGER_SUPPORT=y CONFIG_KSU_TRACEPOINT_HOOK=y", workflow_text)
+        ddk_start = workflow_text.index("docker run --rm --privileged")
+        ddk_end = workflow_text.index('test -s "$GITHUB_WORKSPACE/renebula-dist/kernelsu.ko"', ddk_start)
+        self.assertIn('2>&1 | tee "$RUNNER_TEMP/build.log"', workflow_text[ddk_start:ddk_end])
+        self.assertIn("steps.plan.outputs.artifact == 'image'", workflow_text)
+        configure_call = workflow_text.index("python3 scripts/configure_variant.py")
+        configure_step = workflow_text[workflow_text.rfind("      - name:", 0, configure_call):configure_call]
+        self.assertIn("if: steps.plan.outputs.artifact == 'image'", configure_step)
+        self.assertNotIn("--allow_undeclared_modules", workflow_text)
 
     def test_static_gate_accepts_catalog_and_exact_custom_plan(self):
         with contextlib.redirect_stderr(io.StringIO()):

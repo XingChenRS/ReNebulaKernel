@@ -91,25 +91,22 @@ class RootAdapterTests(unittest.TestCase):
                     )
                 self.assertEqual(record["provider"], provider)
                 self.assertEqual(record["commit"], lock["commit"])
-                self.assertEqual(record["module_out"], "drivers/kernelsu/kernelsu.ko")
                 self.assertEqual(record["checkout_mode"], "detached-commit")
-                self.assertEqual(
-                    record.get("provider_metadata_adapter"),
-                    "resukisu-kleaf-absolute-source-v1" if provider == "resukisu" else None,
-                )
+                self.assertEqual(record["integration"], "external-gki-ddk")
+                self.assertNotIn("provider_metadata_adapter", record)
                 self.assertEqual(
                     (workspace / "common" / "drivers" / "Makefile").read_text(encoding="utf-8").count("kernelsu/"),
-                    1,
+                    0,
                 )
 
-    def test_only_kleaf_lkm_declares_the_module_output(self):
+    def test_only_builtin_integrates_provider_into_the_kernel_tree(self):
         lock = apply_root_adapter.load_root_lock(
             self.REPO_ROOT / "locks" / "root-sources.lock.json",
             "kernelsu.main.4a5f4311",
         )
         for variant_id, adapter, expected in (
-            ("lkm-module", apply_root_adapter.KLEAF_FRAGMENT_ADAPTER, True),
-            ("builtin-image", apply_root_adapter.KLEAF_FRAGMENT_ADAPTER, False),
+            ("lkm-module", apply_root_adapter.KLEAF_FRAGMENT_ADAPTER, False),
+            ("builtin-image", apply_root_adapter.KLEAF_FRAGMENT_ADAPTER, True),
             ("lkm-module", apply_root_adapter.LEGACY_BUILD_ADAPTER, False),
         ):
             with self.subTest(variant_id=variant_id, adapter=adapter), tempfile.TemporaryDirectory() as temporary:
@@ -119,62 +116,9 @@ class RootAdapterTests(unittest.TestCase):
                     apply_root_adapter, "create_symlink"
                 ):
                     record = apply_root_adapter.apply_provider(lock, workspace, variant_id, adapter)
-                content = (workspace / "common" / "BUILD.bazel").read_text(encoding="utf-8")
-                self.assertEqual("drivers/kernelsu/kernelsu.ko" in content, expected)
-                self.assertEqual("module_out" in record, expected)
-
-    def test_kleaf_declaration_targets_only_kernel_aarch64_among_three_arm64_profiles(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            build_file = Path(temporary) / "BUILD.bazel"
-            build_file.write_text(
-                "define_common_kernels(target_configs = {\n"
-                '    "kernel_aarch64": {\n'
-                '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
-                "    },\n"
-                '    "kernel_aarch64_16k": {\n'
-                '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
-                "    },\n"
-                '    "kernel_aarch64_debug": {\n'
-                '        "module_implicit_outs": get_gki_modules_list("arm64"),\n'
-                "    },\n"
-                "})\n",
-                encoding="utf-8",
-            )
-            try:
-                apply_root_adapter.declare_kleaf_lkm_module(build_file)
-            except apply_root_adapter.AdapterError as error:
-                self.fail(f"locked Google BUILD shape must be supported: {error}")
-            content = build_file.read_text(encoding="utf-8")
-            self.assertEqual(content.count(apply_root_adapter.MODULE_OUT), 1)
-            kernel_block, remainder = content.split('    "kernel_aarch64_16k": {', 1)
-            self.assertIn(apply_root_adapter.MODULE_OUT, kernel_block)
-            self.assertNotIn(apply_root_adapter.MODULE_OUT, remainder)
-
-    def test_kleaf_declaration_supports_android16_common_kernel_shape(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            build_file = Path(temporary) / "BUILD.bazel"
-            build_file.write_text(
-                "common_kernel(\n"
-                '    name = "kernel_aarch64",\n'
-                '    arch = "arm64",\n'
-                '    module_implicit_outs = get_gki_modules_list("arm64") + get_kunit_modules_list("arm64"),\n'
-                ")\n\n"
-                "common_kernel(\n"
-                '    name = "kernel_aarch64_16k",\n'
-                '    arch = "arm64",\n'
-                '    module_implicit_outs = get_gki_modules_list("arm64") + get_kunit_modules_list("arm64"),\n'
-                ")\n",
-                encoding="utf-8",
-            )
-
-            apply_root_adapter.declare_kleaf_lkm_module(build_file)
-            apply_root_adapter.declare_kleaf_lkm_module(build_file)
-
-            content = build_file.read_text(encoding="utf-8")
-            self.assertEqual(content.count(apply_root_adapter.MODULE_OUT), 1)
-            kernel_block, remainder = content.split('    name = "kernel_aarch64_16k",', 1)
-            self.assertIn(apply_root_adapter.MODULE_OUT, kernel_block)
-            self.assertNotIn(apply_root_adapter.MODULE_OUT, remainder)
+                content = (workspace / "common" / "drivers" / "Makefile").read_text(encoding="utf-8")
+                self.assertEqual("kernelsu/" in content, expected)
+                self.assertEqual(record["integration"] == "in-tree-builtin", expected)
 
     def test_kleaf_pins_provider_metadata_to_checkout_outside_sandbox(self):
         with tempfile.TemporaryDirectory() as temporary:

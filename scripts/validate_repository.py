@@ -79,6 +79,15 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
         raise RepositoryError("registry root source order is invalid")
     if [entry["id"] for entry in feature_entries] != ["susfs", "kpm", "vivo-vermagic"]:
         raise RepositoryError("registry feature set is invalid")
+    expected_feature_roots = {
+        "susfs": ["kernelsu", "sukisu", "resukisu"],
+        "kpm": ["sukisu"],
+        "vivo-vermagic": ["kernelsu", "sukisu", "resukisu"],
+    }
+    for entry in feature_entries:
+        profile, _ = resolve_plan.load_feature_profile(root, entry["id"], registry)
+        if profile["root_sources"] != expected_feature_roots[entry["id"]]:
+            raise RepositoryError(f"feature {entry['id']} has an invalid root provider boundary")
     ensure_profile_files(root, "releases", {entry["profile"] for entry in releases})
     ensure_profile_files(root, "root-providers", {entry["profile"] for entry in root_entries})
     ensure_profile_files(root, "features", {entry["profile"] for entry in feature_entries})
@@ -111,11 +120,15 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
             if canonical_json(first) != canonical_json(second):
                 raise RepositoryError(f"request is not deterministic: {entry['id']}/{root_source}")
             plain_plans[(entry["id"], root_source)] = first
-        if family["features"]["susfs"] and family["features"]["kpm"]:
+        if family["features"]["susfs"]:
             for root_source in ROOT_SOURCES[1:]:
                 resolve_plan.resolve_plan(
-                    root, entry["id"], root_source, susfs=True, kpm=True
+                    root, entry["id"], root_source, susfs=True
                 )
+        if family["features"]["kpm"]:
+            resolve_plan.resolve_plan(
+                root, entry["id"], "sukisu", kpm=True
+            )
         if family["features"]["vivo_vermagic"]:
             for root_source in ROOT_SOURCES[1:]:
                 resolve_plan.resolve_plan(

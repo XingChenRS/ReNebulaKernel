@@ -34,11 +34,27 @@ class FeatureAdapterTests(unittest.TestCase):
             with self.assertRaises(apply_feature_adapter.FeatureError):
                 apply_feature_adapter.apply_vivo_vermagic(header)
 
+    def test_vivo_module_modinfo_inserts_one_token_before_architecture(self):
+        original = (
+            b"name=kernelsu\0"
+            b"vermagic=6.1.75-android14 SMP preempt mod_unload modversions aarch64\0"
+            b"depends=\0"
+        )
+
+        updated = apply_feature_adapter.add_vivo_modinfo_token(original)
+
+        self.assertIn(
+            b"vermagic=6.1.75-android14 SMP preempt mod_unload modversions vivo aarch64\0",
+            updated,
+        )
+        with self.assertRaises(apply_feature_adapter.FeatureError):
+            apply_feature_adapter.add_vivo_modinfo_token(updated)
+
     def test_feature_scope_matches_literal_variants(self):
         plan = resolve_plan.resolve_plan(
             self.REPO_ROOT,
             self.release_id(),
-            "resukisu",
+            "sukisu",
             susfs=True,
             kpm=True,
             vivo_vermagic=True,
@@ -159,33 +175,102 @@ class FeatureAdapterTests(unittest.TestCase):
             for path in (tool, kpimg, image):
                 path.write_bytes(b"fixture")
             def fake_run(command, cwd=None):
+                if "-l" in command and "-k" in command:
+                    return "[kpimg]\nversion=0xd02\nconfig=android,release\n"
+                if "-l" in command and "-i" in command:
+                    return "[kernel]\npatched=true\n[kpimg]\nconfig=android,release\n"
                 Path(command[command.index("-o") + 1]).write_bytes(b"patched")
                 return ""
             with patch.object(apply_feature_adapter, "run", side_effect=fake_run) as runner:
                 record = apply_feature_adapter.patch_kpm_image(tool, kpimg, image, output)
             self.assertEqual(output.read_bytes(), b"patched")
             self.assertEqual(record["output"], str(output))
-            command = runner.call_args.args[0]
+            command = next(
+                call.args[0] for call in runner.call_args_list if "-p" in call.args[0]
+            )
             self.assertEqual(command[1:4], ["-p", "-i", str(image)])
             self.assertIn(str(kpimg), command)
 
-    def test_kpm_source_adapter_disables_removed_android_root_path(self):
+    def test_kpm_image_patch_rejects_an_unverified_output_image(self):
         with tempfile.TemporaryDirectory() as temporary:
-            makefile = Path(temporary) / "Makefile"
+            root = Path(temporary)
+            tool = root / "kptools"
+            kpimg = root / "kpimg"
+            image = root / "Image"
+            output = root / "Image-kpm"
+            for path in (tool, kpimg, image):
+                path.write_bytes(b"fixture")
+
+            def fake_run(command, cwd=None):
+                if "-l" in command and "-k" in command:
+                    return "[kpimg]\nconfig=android,release\n"
+                if "-l" in command and "-i" in command:
+                    return "[kernel]\npatched=false\n"
+                output.write_bytes(b"bad-patch")
+                return ""
+
+            with patch.object(apply_feature_adapter, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(
+                    apply_feature_adapter.FeatureError, "patched Android KPM"
+                ):
+                    apply_feature_adapter.patch_kpm_image(tool, kpimg, image, output)
+
+    def test_kpm_image_patch_rejects_non_android_kpimg(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = root / "kptools"
+            kpimg = root / "kpimg"
+            image = root / "Image"
+            output = root / "Image-kpm"
+            for path in (tool, kpimg, image):
+                path.write_bytes(b"fixture")
+            with patch.object(
+                apply_feature_adapter,
+                "run",
+                return_value="[kpimg]\nversion=0xd02\nconfig=linux,release\n",
+            ):
+                with self.assertRaisesRegex(
+                    apply_feature_adapter.FeatureError, "Android release mode"
+                ):
+                    apply_feature_adapter.patch_kpm_image(tool, kpimg, image, output)
+            self.assertFalse(output.exists())
+
+    def test_kpm_source_adapter_keeps_android_and_removes_only_stale_ap_callbacks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            makefile = root / "Makefile"
+            user_event = root / "user_event.c"
             makefile.write_text(
                 "# ifdef ANDROID\n"
                 "\tCFLAGS += -DANDROID\n"
                 "# endif\n",
                 encoding="utf-8",
             )
-
-            apply_feature_adapter.adapt_kpm_makefile(makefile)
-
-            self.assertEqual(
-                makefile.read_text(encoding="utf-8"),
-                "# ReNebula: this trimmed KPM provider excludes the legacy AP root path.\n"
-                "# CFLAGS += -DANDROID\n",
+            user_event.write_text(
+                "    #ifdef ANDROID\n"
+                "    if (lib_strcmp(safe_event, \"post-fs-data\") == 0) {\n"
+                "        log_boot(\"post-fs-data: loading ap package config ...\\n\");\n"
+                "        load_ap_package_config();\n"
+                "    }\n"
+                "    if (lib_strcmp(safe_event, \"boot-completed\") == 0) {\n\n"
+                "    }\n"
+                "    if (lib_strcmp(safe_event, \"uid_listener\") == 0 && lib_strcmp(safe_args, \"package-list-updated\") == 0) {\n"
+                "        int trust_rc = refresh_trusted_manager_state();\n"
+                "        log_boot(\"boot-completed: trusted manager refresh rc=%d\\n\", trust_rc);\n"
+                "    }\n"
+                "    #endif\n"
+                "    logki(\"user report event: %s, args: %s\\n\", safe_event, safe_args);\n",
+                encoding="utf-8",
             )
+
+            apply_feature_adapter.adapt_kpm_source(makefile, user_event)
+
+            self.assertIn("CFLAGS += -DANDROID", makefile.read_text(encoding="utf-8"))
+            adapted = user_event.read_text(encoding="utf-8")
+            self.assertNotIn("load_ap_package_config", adapted)
+            self.assertNotIn("refresh_trusted_manager_state", adapted)
+            self.assertIn("#ifdef ANDROID", adapted)
+            self.assertIn("user report event", adapted)
 
     def test_vivo_scope_is_rejected_even_if_a_plan_is_tampered(self):
         plan = resolve_plan.resolve_plan(

@@ -79,7 +79,7 @@ class ResolvePlanTests(unittest.TestCase):
                     vivo_vermagic=True,
                 )
 
-    def test_susfs_and_kpm_are_builtin_features_and_reject_6_18(self):
+    def test_susfs_is_provider_wide_but_kpm_requires_the_sukisu_bridge(self):
         release_id = self.release_for("android14-6.1")
         for root_source in ("kernelsu", "sukisu", "resukisu"):
             plan = resolve_plan.resolve_plan(
@@ -87,13 +87,24 @@ class ResolvePlanTests(unittest.TestCase):
                 release_id,
                 root_source,
                 susfs=True,
-                kpm=True,
             )
             builtin, lkm = plan["variants"]
             self.assertTrue(builtin["features"]["susfs"])
-            self.assertTrue(builtin["features"]["kpm"])
             self.assertFalse(lkm["features"]["susfs"])
-            self.assertFalse(lkm["features"]["kpm"])
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT, release_id, "sukisu", kpm=True
+        )
+        builtin, lkm = plan["variants"]
+        self.assertTrue(builtin["features"]["kpm"])
+        self.assertEqual(builtin["configuration"]["KPM"], "y")
+        self.assertFalse(lkm["features"]["kpm"])
+        for root_source in ("kernelsu", "resukisu"):
+            with self.subTest(root_source=root_source), self.assertRaisesRegex(
+                resolve_plan.PlanError, "KPM.*SukiSU"
+            ):
+                resolve_plan.resolve_plan(
+                    self.REPO_ROOT, release_id, root_source, kpm=True
+                )
         release_id = self.release_for("android17-6.18")
         for feature in ("susfs", "kpm"):
             with self.subTest(feature=feature), self.assertRaises(resolve_plan.PlanError):

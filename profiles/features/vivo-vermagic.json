@@ -4,6 +4,7 @@
   "id": "vivo-vermagic",
   "adapter": "vivo-vermagic-token-v1",
   "variant": "lkm-module",
+  "root_sources": ["kernelsu", "sukisu", "resukisu"],
   "supported_series": ["5.10", "5.15", "6.1"],
   "token": "vivo "
 }

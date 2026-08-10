@@ -111,7 +111,15 @@ def validate_plan(
     adapter = build.get("adapter")
     mode = release_contract.get("mode")
     if adapter in {LEGACY_ADAPTER, KLEAF_ADAPTER}:
-        if (
+        if variant.get("root_linkage") == "lkm":
+            expected_series = ".".join(observed_base_release.split(".")[:2])
+            if (
+                mode != "kmi-portable-module"
+                or release_contract.get("kmi_family") != plan.get("selection", {}).get("family_id")
+                or release_contract.get("kernel_series") != expected_series
+            ):
+                raise ContractError("LKM variant has an invalid portable KMI contract")
+        elif (
             mode != "base-prefix-and-suffix"
             or release_contract.get("prefix") != observed_base_release
             or release_contract.get("suffix") != suffix
@@ -164,6 +172,15 @@ def validate_observed_release(
 ) -> None:
     if len(actual_release) > MAX_UTS_RELEASE_LENGTH:
         raise ContractError("observed release exceeds the UTS_RELEASE length limit")
+    if release_contract["mode"] == "kmi-portable-module":
+        series = release_contract["kernel_series"]
+        if not re.match(rf"^{re.escape(series)}(?:\.|-)", actual_release):
+            raise ContractError(f"release {actual_release} does not match KMI series {series}")
+        family = release_contract["kmi_family"]
+        android_release = family.split("-", 1)[0]
+        if not re.search(rf"(?:^|-){re.escape(android_release)}(?:-|$)", actual_release):
+            raise ContractError(f"release {actual_release} does not match KMI family {family}")
+        return
     if release_contract["mode"] == "exact":
         expected = release_contract["expected_uname_release"]
         if actual_release != expected:

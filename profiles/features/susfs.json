@@ -4,6 +4,7 @@
   "id": "susfs",
   "adapter": "susfs4ksu-overlay-v1",
   "variant": "builtin-image",
+  "root_sources": ["kernelsu", "sukisu", "resukisu"],
   "supported_series": ["5.10", "5.15", "6.1", "6.6", "6.12"],
   "source_locks": {
     "android12-5.10": "susfs.android12-5.10.3c14ad54",
