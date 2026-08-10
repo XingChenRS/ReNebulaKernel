@@ -1,134 +1,55 @@
 # ReNebulaKernel
 
-ReNebulaKernel v3 is a clean, reproducible Google GKI build system. It
-materializes a locked Google source snapshot and never downloads, replaces, or
-patches against Vivo kernel sources.
+ReNebulaKernel 是一个只使用锁定 Google GKI 源码的可复现构建系统。它不再下载、替换或引用 Vivo 内核源码；Vivo 兼容性被收敛为可审计的 LKM `vermagic` 标记。
 
-## KMI coverage
+## 唯一构建入口
 
-P0 registers every Google GKI KMI family for which the project has a complete
-public source-and-build chain. A release selection is a locked snapshot inside
-one of these families; it is not a floating branch name.
+仓库只保留一个手动 GitHub Actions 工作流：`.github/workflows/build.yml`。推送代码不会自动构建，只有手动点击 **Run workflow** 才会执行。
 
-| Android generation | KMI family | Build backend |
-|---|---|---|
-| Android 12 | `android12-5.10` | legacy `build/build.sh` |
-| Android 13 | `android13-5.10`, `android13-5.15` | legacy `build/build.sh` |
-| Android 14 | `android14-5.15`, `android14-6.1` | `kleaf-defconfig-fragment-arm64-v1` |
-| Android 15 | `android15-6.6` | `kleaf-defconfig-fragment-arm64-v1` |
-| Android 16 | `android16-6.12` | `kleaf-defconfig-fragment-arm64-v1` |
-| Android 17 | `android17-6.18` | `kleaf-defconfig-fragment-arm64-v1` |
+| 选项 | 含义 |
+|---|---|
+| `release_id` | 选择一个锁定的 Google GKI release。列表顺序不表示 KMI 优先级。 |
+| `root_source` | `none`、`kernelsu`、`sukisu` 或 `resukisu`。不包含 KernelSU-Next。 |
+| `susfs` | 只给 Built-in Image 集成锁定的 SUSFS；LKM 不受影响；6.18 暂不允许。 |
+| `kpm` | 只对 Built-in Image 执行锁定的 KPM 后处理；LKM 不受影响；6.18 暂不允许。 |
+| `vivo_vermagic` | 始终显示；开启后只给 LKM 的标准 vermagic 增加独立 `vivo` token。仅 5.10、5.15、6.1 允许，6.6 及以上在解析阶段拒绝。 |
+| `uname_tag` | 可选安全标签，例如 `MLXC_RENB`。不要写前导 `-`；系统只追加标签，不覆盖 Google 基础版本。 |
 
-No KMI family is a default or priority sample. The registry is intentionally
-data-driven so every listed family follows the same planning, locking,
-provenance, and version rules.
+`root_source=none` 只产出 `baseline-image`。选择任一 Root 实现后，一次请求自动并行产生：
 
-“Source-locked” means the manifest, superproject, source inventory, and build
-adapter are pinned and independently checkable. It does **not** claim that
-every release has already completed an image-verification run. Source
-verification and image verification are separate recorded states.
+- `builtin-image`：Root 编入 Image；SUSFS 与 KPM 只作用于这个变体。
+- `lkm-module`：产出 `kernelsu.ko`；Vivo vermagic 只作用于这个变体。
 
-## Selector matrix
+KSU debug 固定关闭，不再作为用户选项。linkage、hook 和内部 Kconfig 也不是公开输入，而是由 provider profile 和变体契约确定。
 
-Every registered release retains the pure-GKI baseline tuple:
+## KMI 覆盖
 
-- root provider: `none`
-- root linkage: `none`
-- hook mode: `none`
-- configuration profile: `release`
-- output: a normal arm64 GKI `Image`, provenance, and version diagnostics
+| Android | KMI | 构建后端 | 普通 Root | SUSFS / KPM | Vivo vermagic |
+|---|---|---|---|---|---|
+| 12 | 5.10 | legacy `build/build.sh` | 是 | 是 | 是 |
+| 13 | 5.10 | legacy `build/build.sh` | 是 | 是 | 是 |
+| 13 | 5.15 | legacy `build/build.sh` | 是 | 是 | 是 |
+| 14 | 5.15 | Kleaf | 是 | 是 | 是 |
+| 14 | 6.1 | Kleaf | 是 | 是 | 是 |
+| 15 | 6.6 | Kleaf | 是 | 是 | 禁止 |
+| 16 | 6.12 | Kleaf | 是 | 是 | 禁止 |
+| 17 | 6.18 | Kleaf | 是 | 暂不允许 | 禁止 |
 
-The current admitted root tuples are deliberately narrow:
+表中的“是”表示 schema、锁、适配器和静态准入已经建立，不表示所有组合都已完成真实 Image 编译。只有手动 Actions 的实际构建与产物验收通过后，组合才可称为 `image-verified`。
 
-| KMI families | Root provider | Root linkage | Hook mode | Configuration profile |
-|---|---|---|---|---|
-| Android 12 through Android 16 / 5.10–6.12 | `resukisu` | `lkm`, `builtin` | `tracepoint` | `release`, `debug` |
-| Android 17 / 6.18 | `none` | `none` | `none` | `release` only |
+## 不可变计划
 
-`resukisu` is locked to one ReSukiSU commit. Its `main` ref is recorded solely
-as provenance; the adapter fetches and checks out the fixed SHA detached and
-non-shallow, never follows `main` at build time. LKM builds require exactly one
-`kernelsu.ko` in the resulting dist tree; built-in builds deliberately do not
-perform that module check. The selector does not expose manual hooks, SUSFS,
-KPM, arbitrary Kconfig switches, SakiSU, or KernelSU-Next as if they were
-verified combinations; each needs an independent locked source/patch/trust
-contract and image-tested compatibility matrix.
+六项公开输入先被 `scripts/resolve_plan.py` 编译为 schema-5 `build-plan.json`。计划固定 Google source lock、Root/feature source lock、变体、配置和版本契约；后续步骤只消费计划，不再重新解释表单输入，也不会跟随浮动分支。
 
-The user-facing workflow requires five static selections: `release_id`,
-`root_provider`, `root_linkage`, `hook_mode`, and `config_profile`. It also offers an optional
-`uname_suffix`: it must be empty or start with `-`, use only ASCII letters,
-digits, `.`, `_`, and `-`, and is appended after ReNebula's managed suffix.
-It is never a replacement uname or a way to provide a base kernel version.
-The resolver rejects a suffix that repeats the selected Google base release,
-contains unsafe characters, or would exceed the kernel UTS release limit for
-the chosen tuple.
+版本只由 `scripts/configure_variant.py` 写入。`uname_tag` 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能带前导横线、重复基础 release 或突破 64 字节 `UTS_RELEASE` 限制。
 
-The resolver admits only an audited tuple for the selected family, then maps
-it to one immutable Google source lock, root-source lock, build backend,
-configuration fragment, and version contract. Later stages consume that
-canonical build plan rather than reinterpreting workflow input. URLs, branch
-names, shell snippets, and raw Kconfig switches are never accepted as dispatch
-input.
-
-The lock root is the Google manifest/superproject pair. Materialization derives
-and verifies every manifest project against the locked superproject, then
-records the exact detached commits that were actually checked out. No runtime
-fallback to a branch head is allowed.
-
-## Local checks
+## 本地静态验证
 
 ```text
-python scripts/validate_repository.py
 python -m unittest discover -s tests -v
-python scripts/resolve_plan.py --release-id <registered-release-id> --root-provider none --root-linkage none --hook-mode none --config-profile release --uname-suffix=-lab1 --output build-plan.json
+python scripts/validate_repository.py
+python scripts/resolve_plan.py --release-id android14-6.1-lts-2026-08-03 --root-source resukisu --susfs true --kpm true --vivo-vermagic true --uname-tag MLXC_RENB --output build-plan.json
+python scripts/validate_repository.py --plan build-plan.json
 ```
 
-`build-plan.json` is disposable output. It records one fully resolved release
-selection and checksums of the committed registry, family, release, and
-source-lock inputs.
-
-## Build and version contract
-
-Android 12 and Android 13 5.10/5.15 use the dedicated legacy
-`legacy-build-sh-arm64-v1` adapter with `common/build.config.gki.aarch64`. It
-exports `LOCALVERSION=` and applies the selected version through a
-post-defconfig configuration hook, so those releases use the exact
-`base + ReNebula suffix` contract. Android 14 and newer use
-`kleaf-defconfig-fragment-arm64-v1`. The plan selects only one allowlisted
-adapter; no workflow constructs a command from user input.
-
-`common/Makefile` remains the only source of a base release. The single
-version writer adds only a suffix, for example
-`-ReNebula-v3-a<generation>-<kmi>-<config-token>[-<uname-suffix>]`, through
-the selected backend's controlled configuration mechanism. The optional final
-part is validated by the resolver and preserved verbatim in the build plan:
-
-```text
-legacy Android 12/13: <base-release>-ReNebula-v3-a13-5.15-<config-token>[-<uname-suffix>]
-Android 14+ Kleaf:    <base-release><Google-localversion>-ReNebula-v3-a14-6.1-<config-token>[-<uname-suffix>]
-```
-
-The legacy contract asserts the exact `<base-release><ReNebula-suffix>` value.
-Modern Kleaf branches may produce a Google localversion segment, so Android 14+
-uses `base-prefix-and-suffix` rather than making an exact final-uname claim
-before image evidence. It records the complete observed release from generated
-metadata and the built image's `Linux version` string. The build never edits
-`scripts/setlocalversion`; this prevents a base release from being prepended
-twice.
-
-## Upstream boundary
-
-WildKernels is tracked as an architectural and behavioral reference, not as a
-vendored code source. Its root repository does not declare a license, so the
-workflows and scripts here are independently written. The same rule applies to
-every external adapter and patch: it needs a pinned revision and a license
-review before it can be distributed.
-
-The roadmap is described in [the V3 architecture](docs/ARCHITECTURE-V3.md).
-Upstream pins, adopted design ideas, and rejected behavior are recorded in
-[the upstream adoption record](docs/UPSTREAM-ADOPTION.md).
-
-ReSukiSU is the first pure-GKI root provider. It is not an implicit SUSFS,
-KPM, or manual-hook switch. KernelSU-Next is deliberately out of scope:
-ReNebula will not add its adapter, profile, build switch, or compatibility
-promise.
+架构约束见 [ARCHITECTURE-V3.md](docs/ARCHITECTURE-V3.md)，上游锁定与采纳边界见 [UPSTREAM-ADOPTION.md](docs/UPSTREAM-ADOPTION.md)。
