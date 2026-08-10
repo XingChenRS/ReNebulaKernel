@@ -39,7 +39,11 @@ class RootAdapterTests(unittest.TestCase):
         checkout = workspace / "KernelSU"
         source = checkout / "kernel"
         source.mkdir(parents=True)
-        (source / "Kbuild").write_text("obj-$(CONFIG_KSU) += kernelsu.o\n", encoding="utf-8")
+        (source / "Kbuild").write_text(
+            "obj-$(CONFIG_KSU) += kernelsu.o\n"
+            "KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))\n",
+            encoding="utf-8",
+        )
         (source / "Kconfig").write_text('menu "KernelSU"\nendmenu\n', encoding="utf-8")
         return checkout
 
@@ -89,6 +93,10 @@ class RootAdapterTests(unittest.TestCase):
                 self.assertEqual(record["commit"], lock["commit"])
                 self.assertEqual(record["module_out"], "drivers/kernelsu/kernelsu.ko")
                 self.assertEqual(record["checkout_mode"], "detached-commit")
+                self.assertEqual(
+                    record.get("provider_metadata_adapter"),
+                    "resukisu-kleaf-absolute-source-v1" if provider == "resukisu" else None,
+                )
                 self.assertEqual(
                     (workspace / "common" / "drivers" / "Makefile").read_text(encoding="utf-8").count("kernelsu/"),
                     1,
@@ -167,6 +175,23 @@ class RootAdapterTests(unittest.TestCase):
             kernel_block, remainder = content.split('    name = "kernel_aarch64_16k",', 1)
             self.assertIn(apply_root_adapter.MODULE_OUT, kernel_block)
             self.assertNotIn(apply_root_adapter.MODULE_OUT, remainder)
+
+    def test_kleaf_pins_provider_metadata_to_checkout_outside_sandbox(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "KernelSU" / "kernel"
+            source.mkdir(parents=True)
+            kbuild = source / "Kbuild"
+            kbuild.write_text(
+                "KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))\n",
+                encoding="utf-8",
+            )
+
+            apply_root_adapter.pin_kleaf_ksu_src(kbuild, source)
+
+            self.assertEqual(
+                kbuild.read_text(encoding="utf-8"),
+                f"KSU_SRC := {source.resolve().as_posix()}\n",
+            )
 
     def test_plan_rejects_unknown_or_mismatched_variants(self):
         plan = resolve_plan.resolve_plan(self.REPO_ROOT, self.release_id(), "resukisu")

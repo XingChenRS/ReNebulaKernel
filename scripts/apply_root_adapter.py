@@ -30,6 +30,7 @@ KCONFIG_LINE = 'source "drivers/kernelsu/Kconfig"'
 KLEAF_FRAGMENT_ADAPTER = "kleaf-defconfig-fragment-arm64-v1"
 LEGACY_BUILD_ADAPTER = "legacy-build-sh-arm64-v1"
 MODULE_OUT = "drivers/kernelsu/kernelsu.ko"
+RESUKISU_KSU_SRC_ANCHOR = "KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))"
 KLEAF_MODULE_OUTS_RE = re.compile(
     r'^(?P<indent>[ \t]*)"module_implicit_outs": get_gki_modules_list\("arm64"\),$',
     re.MULTILINE,
@@ -234,6 +235,31 @@ def create_symlink(destination: Path, source: Path) -> None:
         raise AdapterError("root adapter symlink could not be verified")
 
 
+def pin_kleaf_ksu_src(kbuild: Path, source: Path) -> None:
+    """Keep ReSukiSU Git metadata reachable from a Kleaf processwrapper sandbox."""
+
+    resolved = source.resolve()
+    absolute_source = resolved.as_posix()
+    if not resolved.is_dir() or kbuild.resolve().parent != resolved:
+        raise AdapterError("Kleaf KSU source pin does not match the provider checkout")
+    if not re.fullmatch(r"[A-Za-z0-9._/:-]+", absolute_source):
+        raise AdapterError("Kleaf KSU source path contains unsupported Make syntax")
+    try:
+        content = kbuild.read_text(encoding="utf-8")
+    except OSError as error:
+        raise AdapterError(f"cannot read provider Kbuild {kbuild}: {error}") from error
+    managed = f"KSU_SRC := {absolute_source}"
+    if content.count(managed) == 1 and RESUKISU_KSU_SRC_ANCHOR not in content:
+        return
+    if content.count(RESUKISU_KSU_SRC_ANCHOR) != 1 or managed in content:
+        raise AdapterError("ReSukiSU KSU_SRC anchor drifted")
+    kbuild.write_text(
+        content.replace(RESUKISU_KSU_SRC_ANCHOR, managed, 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def declare_kleaf_lkm_module(build_file: Path) -> None:
     try:
         content = build_file.read_text(encoding="utf-8")
@@ -313,6 +339,8 @@ def apply_provider(
     source = checkout / lock["source_dir"]
     if not (source / "Kbuild").is_file() or not (source / "Kconfig").is_file():
         raise AdapterError("locked provider has no supported kernel adapter layout")
+    if lock["provider"] == "resukisu" and build_adapter == KLEAF_FRAGMENT_ADAPTER:
+        pin_kleaf_ksu_src(source / "Kbuild", source)
     drivers = kernel_workspace / "common" / "drivers"
     if not drivers.is_dir():
         raise AdapterError("GKI workspace lacks common/drivers")
@@ -333,6 +361,8 @@ def apply_provider(
         "makefile_registration": MAKEFILE_LINE,
         "kconfig_registration": KCONFIG_LINE,
     }
+    if lock["provider"] == "resukisu" and build_adapter == KLEAF_FRAGMENT_ADAPTER:
+        record["provider_metadata_adapter"] = "resukisu-kleaf-absolute-source-v1"
     if variant_id == "lkm-module" and build_adapter == KLEAF_FRAGMENT_ADAPTER:
         declare_kleaf_lkm_module(kernel_workspace / "common" / "BUILD.bazel")
         record["module_out"] = MODULE_OUT
