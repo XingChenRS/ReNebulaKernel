@@ -142,6 +142,32 @@ class RootAdapterTests(unittest.TestCase):
             self.assertIn(apply_root_adapter.MODULE_OUT, kernel_block)
             self.assertNotIn(apply_root_adapter.MODULE_OUT, remainder)
 
+    def test_kleaf_declaration_supports_android16_common_kernel_shape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build_file = Path(temporary) / "BUILD.bazel"
+            build_file.write_text(
+                "common_kernel(\n"
+                '    name = "kernel_aarch64",\n'
+                '    arch = "arm64",\n'
+                '    module_implicit_outs = get_gki_modules_list("arm64") + get_kunit_modules_list("arm64"),\n'
+                ")\n\n"
+                "common_kernel(\n"
+                '    name = "kernel_aarch64_16k",\n'
+                '    arch = "arm64",\n'
+                '    module_implicit_outs = get_gki_modules_list("arm64") + get_kunit_modules_list("arm64"),\n'
+                ")\n",
+                encoding="utf-8",
+            )
+
+            apply_root_adapter.declare_kleaf_lkm_module(build_file)
+            apply_root_adapter.declare_kleaf_lkm_module(build_file)
+
+            content = build_file.read_text(encoding="utf-8")
+            self.assertEqual(content.count(apply_root_adapter.MODULE_OUT), 1)
+            kernel_block, remainder = content.split('    name = "kernel_aarch64_16k",', 1)
+            self.assertIn(apply_root_adapter.MODULE_OUT, kernel_block)
+            self.assertNotIn(apply_root_adapter.MODULE_OUT, remainder)
+
     def test_plan_rejects_unknown_or_mismatched_variants(self):
         plan = resolve_plan.resolve_plan(self.REPO_ROOT, self.release_id(), "resukisu")
         with self.assertRaises(apply_root_adapter.AdapterError):

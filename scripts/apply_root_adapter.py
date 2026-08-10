@@ -40,6 +40,18 @@ KLEAF_MANAGED_MODULE_OUTS_RE = re.compile(
     r'(?P=indent)\],$',
     re.MULTILINE,
 )
+KLEAF_DIRECT_MODULE_OUTS_RE = re.compile(
+    r'^(?P<indent>[ \t]*)module_implicit_outs = get_gki_modules_list\("arm64"\) '
+    r'\+ get_kunit_modules_list\("arm64"\),$',
+    re.MULTILINE,
+)
+KLEAF_DIRECT_MANAGED_MODULE_OUTS_RE = re.compile(
+    r'^(?P<indent>[ \t]*)module_implicit_outs = get_gki_modules_list\("arm64"\) '
+    r'\+ get_kunit_modules_list\("arm64"\) \+ \[\n'
+    r'(?P=indent)[ \t]{4}"drivers/kernelsu/kernelsu\.ko",\n'
+    r'(?P=indent)\],$',
+    re.MULTILINE,
+)
 
 
 class AdapterError(ValueError):
@@ -227,24 +239,41 @@ def declare_kleaf_lkm_module(build_file: Path) -> None:
         content = build_file.read_text(encoding="utf-8")
     except OSError as error:
         raise AdapterError(f"cannot read Kleaf BUILD file {build_file}: {error}") from error
-    target_matches = list(
+    config_targets = list(
         re.finditer(
             r'^(?P<indent>[ \t]*)"kernel_aarch64": \{$',
             content,
             re.MULTILINE,
         )
     )
-    if len(target_matches) != 1:
-        raise AdapterError("Kleaf BUILD file must contain one kernel_aarch64 target config")
-    target = target_matches[0]
-    target_tail = content[target.end() :]
-    closing = re.search(
-        rf"^{re.escape(target.group('indent'))}\}},$",
-        target_tail,
-        re.MULTILINE,
+    direct_targets = list(
+        re.finditer(
+            r'^common_kernel\(\n(?P<indent>[ \t]*)name = "kernel_aarch64",$',
+            content,
+            re.MULTILINE,
+        )
     )
+    if len(config_targets) + len(direct_targets) != 1:
+        raise AdapterError("Kleaf BUILD file must contain one supported kernel_aarch64 target")
+    if config_targets:
+        target = config_targets[0]
+        closing_pattern = rf"^{re.escape(target.group('indent'))}\}},$"
+        anchor_re = KLEAF_MODULE_OUTS_RE
+        managed_re = KLEAF_MANAGED_MODULE_OUTS_RE
+        anchor_text = '"module_implicit_outs": get_gki_modules_list("arm64")'
+    else:
+        target = direct_targets[0]
+        closing_pattern = r"^\)$"
+        anchor_re = KLEAF_DIRECT_MODULE_OUTS_RE
+        managed_re = KLEAF_DIRECT_MANAGED_MODULE_OUTS_RE
+        anchor_text = (
+            'module_implicit_outs = get_gki_modules_list("arm64") '
+            '+ get_kunit_modules_list("arm64")'
+        )
+    target_tail = content[target.end() :]
+    closing = re.search(closing_pattern, target_tail, re.MULTILINE)
     if closing is None:
-        raise AdapterError("Kleaf kernel_aarch64 target config is not closed canonically")
+        raise AdapterError("Kleaf kernel_aarch64 target is not closed canonically")
     block_start = target.end()
     block_end = target.end() + closing.start()
     block = content[block_start:block_end]
@@ -252,17 +281,17 @@ def declare_kleaf_lkm_module(build_file: Path) -> None:
         if (
             content.count(MODULE_OUT) != 1
             or MODULE_OUT not in block
-            or len(KLEAF_MANAGED_MODULE_OUTS_RE.findall(block)) != 1
+            or len(managed_re.findall(block)) != 1
         ):
             raise AdapterError("Kleaf BUILD file has a non-canonical KernelSU module declaration")
         return
-    matches = list(KLEAF_MODULE_OUTS_RE.finditer(block))
+    matches = list(anchor_re.finditer(block))
     if len(matches) != 1:
         raise AdapterError("Kleaf kernel_aarch64 target must contain one module_implicit_outs anchor")
     match = matches[0]
     indent = match.group("indent")
     replacement = (
-        f'{indent}"module_implicit_outs": get_gki_modules_list("arm64") + [\n'
+        f"{indent}{anchor_text} + [\n"
         f'{indent}    "{MODULE_OUT}",\n'
         f"{indent}],"
     )

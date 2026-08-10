@@ -417,6 +417,23 @@ def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     }
 
 
+def adapt_kpm_makefile(makefile: Path) -> None:
+    """Build only the KPM loader retained by this trimmed KernelPatch fork."""
+
+    try:
+        content = makefile.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read KPM Makefile {makefile}: {error}") from error
+    legacy_android = "# ifdef ANDROID\n\tCFLAGS += -DANDROID\n# endif\n"
+    if content.count(legacy_android) != 1:
+        raise FeatureError("locked KPM Makefile Android compatibility anchor drifted")
+    replacement = (
+        "# ReNebula: this trimmed KPM provider excludes the legacy AP root path.\n"
+        "# CFLAGS += -DANDROID\n"
+    )
+    makefile.write_text(content.replace(legacy_android, replacement, 1), encoding="utf-8", newline="\n")
+
+
 def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     source = plan["features"]["kpm"].get("source")
     if not isinstance(source, dict):
@@ -424,11 +441,13 @@ def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     checkout = checkout_locked(source, workspace / ".renebula-features" / "kpm", KPM_REPOSITORY)
     if not (checkout / "tools" / "Makefile").is_file() or not (checkout / "kernel" / "Makefile").is_file():
         raise FeatureError("locked KPM source lacks build inputs")
+    adapt_kpm_makefile(checkout / "kernel" / "Makefile")
     return {
         "feature": "kpm",
         "source_lock": plan["features"]["kpm"]["source_lock"],
         "commit": source["commit"],
         "checkout": str(checkout),
+        "source_adapter": "trimmed-kpm-no-ap-root-v1",
         "post_build": True,
     }
 

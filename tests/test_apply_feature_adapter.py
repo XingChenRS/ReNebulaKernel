@@ -169,6 +169,24 @@ class FeatureAdapterTests(unittest.TestCase):
             self.assertEqual(command[1:4], ["-p", "-i", str(image)])
             self.assertIn(str(kpimg), command)
 
+    def test_kpm_source_adapter_disables_removed_android_root_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            makefile = Path(temporary) / "Makefile"
+            makefile.write_text(
+                "# ifdef ANDROID\n"
+                "\tCFLAGS += -DANDROID\n"
+                "# endif\n",
+                encoding="utf-8",
+            )
+
+            apply_feature_adapter.adapt_kpm_makefile(makefile)
+
+            self.assertEqual(
+                makefile.read_text(encoding="utf-8"),
+                "# ReNebula: this trimmed KPM provider excludes the legacy AP root path.\n"
+                "# CFLAGS += -DANDROID\n",
+            )
+
     def test_vivo_scope_is_rejected_even_if_a_plan_is_tampered(self):
         plan = resolve_plan.resolve_plan(
             self.REPO_ROOT, self.release_id("android15-6.6"), "resukisu"
