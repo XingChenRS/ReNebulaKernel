@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""Apply locked SUSFS, KPM, and Vivo adaptations for one literal variant."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from sync_google_gki import canonical_json
+
+
+VIVO_SERIES = {"5.10", "5.15", "6.1"}
+SUSFS_SERIES = {"5.10", "5.15", "6.1", "6.6", "6.12"}
+KPM_SERIES = {"5.10", "5.15", "6.1", "6.6", "6.12"}
+SUSFS_REPOSITORY = "https://gitlab.com/simonpunk/susfs4ksu.git"
+KPM_REPOSITORY = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git"
+SUKISU_REJECTS = {
+    "kernel/Kbuild.rej",
+    "kernel/core/init.c.rej",
+    "kernel/policy/app_profile.h.rej",
+}
+
+
+class FeatureError(ValueError):
+    """Raised when a feature cannot be applied to its exact plan variant."""
+
+
+def _reject_duplicate_keys(pairs: Iterable[Tuple[str, Any]]) -> Dict[str, Any]:
+    value: Dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise FeatureError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def load_json(path: Path) -> Dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            value = json.load(handle, object_pairs_hook=_reject_duplicate_keys)
+    except (OSError, json.JSONDecodeError) as error:
+        raise FeatureError(f"cannot read JSON {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise FeatureError(f"{path} must contain a JSON object")
+    return value
+
+
+def run(command: List[str], *, cwd: Optional[Path] = None) -> str:
+    rendered = " ".join(command)
+    print(f"+ {rendered}")
+    try:
+        return subprocess.check_output(command, cwd=cwd, text=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as error:
+        raise FeatureError(f"command failed ({rendered})\n{error.output.strip()}") from error
+
+
+def validate_feature_scope(plan: Dict[str, Any], variant_id: str) -> Dict[str, bool]:
+    if plan.get("schema") != 5:
+        raise FeatureError("plan.schema must be 5")
+    selection = plan.get("selection")
+    variants = plan.get("variants")
+    features = plan.get("features")
+    root = plan.get("root")
+    if not all(isinstance(value, dict) for value in (selection, features, root)):
+        raise FeatureError("plan selection, root, and features must be objects")
+    if not isinstance(variants, list):
+        raise FeatureError("plan.variants must be an array")
+    matches = [item for item in variants if isinstance(item, dict) and item.get("id") == variant_id]
+    if len(matches) != 1:
+        raise FeatureError(f"variant must appear exactly once in plan: {variant_id}")
+    variant_features = matches[0].get("features")
+    if not isinstance(variant_features, dict) or set(variant_features) != {
+        "susfs", "kpm", "vivo_vermagic"
+    }:
+        raise FeatureError("variant feature contract is invalid")
+    if not all(isinstance(value, bool) for value in variant_features.values()):
+        raise FeatureError("variant feature values must be booleans")
+    series = selection.get("kernel_series")
+    provider = selection.get("root_source")
+    if root.get("id") != provider:
+        raise FeatureError("plan root does not match selected root source")
+    if provider == "none" and any(variant_features.values()):
+        raise FeatureError("baseline variant cannot carry root features")
+    if variant_features["susfs"] and (variant_id != "builtin-image" or series not in SUSFS_SERIES):
+        raise FeatureError("SUSFS is a built-in feature supported only through 6.12")
+    if variant_features["kpm"] and (variant_id != "builtin-image" or series not in KPM_SERIES):
+        raise FeatureError("KPM is a built-in Image feature supported only through 6.12")
+    if variant_features["vivo_vermagic"] and (
+        variant_id != "lkm-module" or series not in VIVO_SERIES
+    ):
+        raise FeatureError("Vivo vermagic is an LKM feature supported only on 5.10, 5.15, and 6.1")
+    for name, enabled in variant_features.items():
+        top = features.get(name)
+        if not isinstance(top, dict) or not isinstance(top.get("enabled"), bool):
+            raise FeatureError(f"plan.features.{name} is invalid")
+        if enabled and not top["enabled"]:
+            raise FeatureError(f"variant enables unrequested feature: {name}")
+    return dict(variant_features)
+
+
+def apply_vivo_vermagic(path: Path) -> Dict[str, str]:
+    """Insert exactly one ``vivo `` token before build-derived architecture magic."""
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read vermagic header {path}: {error}") from error
+    if '"vivo "' in content:
+        raise FeatureError("Vivo vermagic token is already present")
+    matches = list(re.finditer(r"(?m)^(?P<indent>[ \t]*)MODULE_ARCH_VERMAGIC(?P<tail>[ \t]*\\?)$", content))
+    if len(matches) != 1:
+        raise FeatureError("vermagic header must contain exactly one MODULE_ARCH_VERMAGIC line")
+    match = matches[0]
+    replacement = f'{match.group("indent")}"vivo " MODULE_ARCH_VERMAGIC{match.group("tail")}'
+    path.write_text(content[: match.start()] + replacement + content[match.end() :], encoding="utf-8", newline="\n")
+    return {"path": str(path), "token": "vivo ", "anchor": "MODULE_ARCH_VERMAGIC"}
+
+
+def susfs_provider_strategy(provider: str) -> str:
+    strategies = {
+        "kernelsu": "official-kernelsu-patch",
+        "sukisu": "sukisu-reject-adapter-v1",
+        "resukisu": "provider-native-integration",
+    }
+    try:
+        return strategies[provider]
+    except KeyError as error:
+        raise FeatureError(f"SUSFS has no provider adapter for {provider}") from error
+
+
+def checkout_locked(source: Dict[str, Any], destination: Path, expected_repository: str) -> Path:
+    if source.get("repository") != expected_repository:
+        raise FeatureError("feature source repository is not the audited upstream")
+    commit = source.get("commit")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise FeatureError("feature source commit is not immutable")
+    if destination.exists():
+        raise FeatureError(f"refusing to replace feature checkout: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "init", "-q", str(destination)])
+    run(["git", "-C", str(destination), "remote", "add", "origin", source["repository"]])
+    run(["git", "-C", str(destination), "fetch", "--depth=1", "--no-tags", "origin", commit])
+    run(["git", "-C", str(destination), "checkout", "--detach", "--quiet", commit])
+    if run(["git", "-C", str(destination), "rev-parse", "HEAD"]).strip() != commit:
+        raise FeatureError("feature checkout does not match its lock")
+    return destination
+
+
+def apply_git_patch(repository: Path, patch: Path) -> None:
+    if not patch.is_file():
+        raise FeatureError(f"locked patch is missing: {patch}")
+    run(["git", "-C", str(repository), "apply", "--check", str(patch)])
+    run(["git", "-C", str(repository), "apply", str(patch)])
+
+
+def replace_once(path: Path, old: str, new: str, label: str) -> None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read {path}: {error}") from error
+    if content.count(old) != 1:
+        raise FeatureError(f"SukiSU SUSFS compatibility anchor drifted: {label}")
+    path.write_text(content.replace(old, new, 1), encoding="utf-8", newline="\n")
+
+
+def finish_sukisu_reject_adapter(provider_checkout: Path) -> None:
+    """Resolve the three audited rejects produced by the official KSU patch.
+
+    The official SUSFS patch cleanly applies to every other SukiSU file at the
+    locked commit.  These replacements deliberately bind the remaining hook
+    transition to exact source anchors instead of accepting fuzzy patches.
+    """
+
+    actual_rejects = {
+        path.relative_to(provider_checkout).as_posix()
+        for path in provider_checkout.rglob("*.rej")
+    }
+    if actual_rejects != SUKISU_REJECTS:
+        raise FeatureError(f"unexpected SukiSU SUSFS reject set: {sorted(actual_rejects)}")
+    replace_once(
+        provider_checkout / "kernel" / "Kbuild",
+        "ifeq ($(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER),y)\nccflags-y += -DCONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER=1\nendif\n",
+        "",
+        "Kbuild x86 dispatcher",
+    )
+    init = provider_checkout / "kernel" / "core" / "init.c"
+    replace_once(init, '#include "hook/syscall_hook.h"\n', "", "syscall hook include")
+    replace_once(init, '#include "infra/symbol_resolver.h"\n', '#include "hook/setuid_hook.h"\n#include "feature/sucompat.h"\n', "SUSFS hook includes")
+    replace_once(
+        init,
+        "#if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)\n#include <asm/cpufeature.h>\n#include <linux/version.h>\n#ifndef X86_FEATURE_INDIRECT_SAFE\n#error \"FATAL: Your kernel is missing the indirect syscall bypass patches!\"\n#endif\n#endif\n",
+        "",
+        "x86 dispatcher guard",
+    )
+    body_re = re.compile(
+        r"    ksu_init_symbol_resolver\(\);\n.*?\n#ifdef MODULE\n#ifndef CONFIG_KSU_DEBUG\n"
+        r"    kobject_del\(&THIS_MODULE->mkobj.kobj\);\n#endif\n#endif\n    return 0;\n",
+        re.DOTALL,
+    )
+    content = init.read_text(encoding="utf-8")
+    replacement = (
+        "#ifdef CONFIG_KSU_SUSFS\n    susfs_init();\n#endif\n\n"
+        "    if (spoof_release || spoof_version)\n        ksu_spoof_version(spoof_release, spoof_version);\n\n"
+        "    ksu_feature_init();\n    ksu_supercalls_init();\n    ksu_sucompat_init();\n"
+        "    ksu_setuid_hook_init();\n    ksu_sulog_init();\n    ksu_adb_root_init();\n"
+        "    ksu_selinux_hide_init();\n    ksu_allowlist_init();\n    ksu_throne_tracker_init();\n"
+        "    ksu_ksud_init();\n    ksu_file_wrapper_init();\n\n    return 0;\n"
+    )
+    content, count = body_re.subn(replacement, content, count=1)
+    if count != 1:
+        raise FeatureError("SukiSU SUSFS initialization anchor drifted")
+    content = content.replace(
+        "    // Phase 1: Stop all hooks first to prevent new callbacks\n    ksu_syscall_hook_manager_exit();\n\n",
+        "",
+        1,
+    )
+    content = content.replace("    if (!ksu_late_loaded)\n        ksu_ksud_exit();\n", "    ksu_ksud_exit();\n", 1)
+    init.write_text(content, encoding="utf-8", newline="\n")
+    replace_once(
+        provider_checkout / "kernel" / "policy" / "app_profile.h",
+        "void escape_to_root_for_init(void);",
+        "int escape_to_root_for_init(void);",
+        "escape_to_root_for_init signature",
+    )
+    for relative in sorted(SUKISU_REJECTS):
+        (provider_checkout / relative).unlink()
+    run(["git", "-C", str(provider_checkout), "diff", "--check"])
+
+
+def apply_sukisu_provider_patch(provider_checkout: Path, patch: Path) -> None:
+    process = subprocess.run(
+        ["git", "-C", str(provider_checkout), "apply", "--reject", "--whitespace=fix", str(patch)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    print(process.stdout, end="")
+    if process.returncode != 1:
+        raise FeatureError(
+            "locked SukiSU SUSFS patch must produce exactly its three audited rejects"
+        )
+    finish_sukisu_reject_adapter(provider_checkout)
+
+
+def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
+    provider = plan["selection"]["root_source"]
+    family = plan["selection"]["family_id"]
+    source = plan["features"]["susfs"].get("source")
+    if not isinstance(source, dict):
+        raise FeatureError("SUSFS plan is missing locked source provenance")
+    checkout = checkout_locked(
+        source, workspace / ".renebula-features" / "susfs4ksu", SUSFS_REPOSITORY
+    )
+    common = workspace / "common"
+    provider_checkout = workspace / "KernelSU"
+    if not common.is_dir() or not provider_checkout.is_dir():
+        raise FeatureError("SUSFS requires materialized common and KernelSU trees")
+    for source_path, destination in (
+        (checkout / "kernel_patches" / "fs" / "susfs.c", common / "fs" / "susfs.c"),
+        (checkout / "kernel_patches" / "include" / "linux" / "susfs.h", common / "include" / "linux" / "susfs.h"),
+        (checkout / "kernel_patches" / "include" / "linux" / "susfs_def.h", common / "include" / "linux" / "susfs_def.h"),
+    ):
+        if not source_path.is_file() or destination.exists():
+            raise FeatureError(f"SUSFS source copy contract failed: {source_path} -> {destination}")
+        shutil.copy2(source_path, destination)
+    apply_git_patch(common, checkout / "kernel_patches" / f"50_add_susfs_in_gki-{family}.patch")
+    provider_patch = checkout / "kernel_patches" / "KernelSU" / "10_enable_susfs_for_ksu.patch"
+    strategy = susfs_provider_strategy(provider)
+    if strategy == "official-kernelsu-patch":
+        apply_git_patch(provider_checkout, provider_patch)
+    elif strategy == "sukisu-reject-adapter-v1":
+        apply_sukisu_provider_patch(provider_checkout, provider_patch)
+    else:
+        kconfig = provider_checkout / "kernel" / "Kconfig"
+        if "config KSU_SUSFS" not in kconfig.read_text(encoding="utf-8"):
+            raise FeatureError("ReSukiSU source no longer contains its native SUSFS integration")
+    return {
+        "feature": "susfs",
+        "strategy": strategy,
+        "source_lock": plan["features"]["susfs"]["source_lock"],
+        "commit": source["commit"],
+        "kernel_patch": f"50_add_susfs_in_gki-{family}.patch",
+    }
+
+
+def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
+    source = plan["features"]["kpm"].get("source")
+    if not isinstance(source, dict):
+        raise FeatureError("KPM plan is missing locked source provenance")
+    checkout = checkout_locked(source, workspace / ".renebula-features" / "kpm", KPM_REPOSITORY)
+    if not (checkout / "tools" / "Makefile").is_file() or not (checkout / "kernel" / "Makefile").is_file():
+        raise FeatureError("locked KPM source lacks build inputs")
+    return {
+        "feature": "kpm",
+        "source_lock": plan["features"]["kpm"]["source_lock"],
+        "commit": source["commit"],
+        "checkout": str(checkout),
+        "post_build": True,
+    }
+
+
+def patch_kpm_image(kptools: Path, kpimg: Path, image: Path, output: Path) -> Dict[str, str]:
+    for label, path in (("kptools", kptools), ("kpimg", kpimg), ("Image", image)):
+        if not path.is_file():
+            raise FeatureError(f"{label} is missing: {path}")
+    if output.exists():
+        raise FeatureError(f"refusing to overwrite KPM output: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    run([str(kptools), "-p", "-i", str(image), "-k", str(kpimg), "-o", str(output)])
+    if not output.is_file() or output.stat().st_size == 0:
+        raise FeatureError("kptools did not produce a patched Image")
+    return {
+        "feature": "kpm",
+        "input": str(image),
+        "kpimg": str(kpimg),
+        "output": str(output),
+    }
+
+
+def prepare_features(plan: Dict[str, Any], variant_id: str, workspace: Path) -> Dict[str, Any]:
+    scope = validate_feature_scope(plan, variant_id)
+    applied: List[Dict[str, Any]] = []
+    if scope["susfs"]:
+        applied.append(apply_susfs(plan, workspace))
+    if scope["kpm"]:
+        applied.append(prepare_kpm(plan, workspace))
+    if scope["vivo_vermagic"]:
+        applied.append({"feature": "vivo_vermagic", **apply_vivo_vermagic(workspace / "common" / "include" / "linux" / "vermagic.h")})
+    record = {"schema": 1, "variant_id": variant_id, "applied": applied}
+    (workspace / "renebula-feature-record.json").write_bytes(canonical_json(record) + b"\n")
+    return record
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--variant-id", required=True)
+    parser.add_argument("--kernel-workspace", type=Path, required=True)
+    parser.add_argument("--phase", choices=("prepare", "patch-kpm-image"), default="prepare")
+    parser.add_argument("--image", type=Path)
+    parser.add_argument("--output-image", type=Path)
+    parser.add_argument("--kptools", type=Path)
+    parser.add_argument("--kpimg", type=Path)
+    return parser.parse_args(argv)
+
+
+def main(argv: List[str]) -> int:
+    args = parse_args(argv)
+    try:
+        plan = load_json(args.plan)
+        workspace = args.kernel_workspace.resolve()
+        scope = validate_feature_scope(plan, args.variant_id)
+        if args.phase == "prepare":
+            prepare_features(plan, args.variant_id, workspace)
+        else:
+            if not scope["kpm"]:
+                raise FeatureError("patch-kpm-image requires KPM on this variant")
+            if None in (args.image, args.output_image, args.kptools, args.kpimg):
+                raise FeatureError("KPM Image patching requires image, output-image, kptools, and kpimg")
+            record = patch_kpm_image(args.kptools, args.kpimg, args.image, args.output_image)
+            (workspace / "renebula-kpm-record.json").write_bytes(canonical_json({"schema": 1, **record}) + b"\n")
+    except (FeatureError, OSError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
