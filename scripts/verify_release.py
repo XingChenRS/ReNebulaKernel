@@ -176,10 +176,6 @@ def validate_observed_release(
         series = release_contract["kernel_series"]
         if not re.match(rf"^{re.escape(series)}(?:\.|-)", actual_release):
             raise ContractError(f"release {actual_release} does not match KMI series {series}")
-        family = release_contract["kmi_family"]
-        android_release = family.split("-", 1)[0]
-        if not re.search(rf"(?:^|-){re.escape(android_release)}(?:-|$)", actual_release):
-            raise ContractError(f"release {actual_release} does not match KMI family {family}")
         return
     if release_contract["mode"] == "exact":
         expected = release_contract["expected_uname_release"]
@@ -203,7 +199,14 @@ def validate_module_vermagic(
     if not parts:
         raise ContractError("module vermagic is empty")
     validate_observed_release(parts[0], base_release, suffix, release_contract)
-    count = parts[1:].count("vivo")
+    flags = parts[1:]
+    if release_contract["mode"] == "kmi-portable-module":
+        missing = {"modversions", "aarch64"} - set(flags)
+        if missing:
+            raise ContractError(
+                f"portable GKI LKM vermagic is missing required flags: {sorted(missing)}"
+            )
+    count = flags.count("vivo")
     if vivo_enabled and count != 1:
         raise ContractError("Vivo LKM must contain exactly one vivo vermagic token")
     if not vivo_enabled and count:

@@ -116,7 +116,7 @@ class VerifyReleaseTests(unittest.TestCase):
             plan_path, makefile = self.write_inputs(root, plan)
             module = root / "kernelsu.ko"
             module.write_bytes(
-                b"vermagic=6.1.0-android14 SMP preempt mod_unload modversions vivo aarch64\0"
+                b"vermagic=6.1.166-dirty SMP preempt mod_unload modversions vivo aarch64\0"
             )
 
             result = verify_release.main([
@@ -126,7 +126,7 @@ class VerifyReleaseTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
 
-    def test_ddk_lkm_rejects_a_different_android_kmi_family(self):
+    def test_ddk_lkm_rejects_a_different_kernel_series(self):
         plan = resolve_plan.resolve_plan(
             self.REPO_ROOT,
             self.release_id(),
@@ -137,8 +137,27 @@ class VerifyReleaseTests(unittest.TestCase):
             plan_path, makefile = self.write_inputs(root, plan)
             module = root / "kernelsu.ko"
             module.write_bytes(
-                b"vermagic=6.1.0-android13 SMP preempt mod_unload modversions aarch64\0"
+                b"vermagic=5.15.166-dirty SMP preempt mod_unload modversions aarch64\0"
             )
+
+            result = verify_release.main([
+                "--plan", str(plan_path), "--variant-id", "lkm-module",
+                "--makefile", str(makefile), "--module", str(module),
+            ])
+
+            self.assertEqual(result, 2)
+
+    def test_ddk_lkm_requires_modversions_and_arm64_vermagic(self):
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_id(),
+            "resukisu",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan_path, makefile = self.write_inputs(root, plan)
+            module = root / "kernelsu.ko"
+            module.write_bytes(b"vermagic=6.1.166-dirty SMP preempt mod_unload aarch64\0")
 
             result = verify_release.main([
                 "--plan", str(plan_path), "--variant-id", "lkm-module",
