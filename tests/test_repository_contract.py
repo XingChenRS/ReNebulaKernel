@@ -60,6 +60,14 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("root_linkage:", workflow_text.split("jobs:", 1)[0])
         self.assertNotIn("hook_mode:", workflow_text.split("jobs:", 1)[0])
 
+    def test_kpm_compiler_is_explicitly_targeted_to_arm64(self):
+        workflow_text = (self.REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('CC="$clang --target=aarch64-linux-android35"', workflow_text)
+        self.assertIn("grep -qx '#define __aarch64__ 1'", workflow_text)
+        self.assertNotIn('ln -s clang "$clang_bin/aarch64-linux-android35-clang"', workflow_text)
+
     def test_static_gate_accepts_catalog_and_exact_custom_plan(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(validate_repository.main(["--repo-root", str(self.REPO_ROOT)]), 0)

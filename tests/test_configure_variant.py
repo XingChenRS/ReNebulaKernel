@@ -56,7 +56,7 @@ class ConfigureVariantTests(unittest.TestCase):
                 output,
             )
             content = (output / "localversion_defconfig").read_text(encoding="utf-8")
-            self.assertIn('CONFIG_LOCALVERSION="-ReNebula-v4-a14-6.1-ksu-bi-lab1"', content)
+            self.assertIn('CONFIG_LOCALVERSION="-RN4-k-b-lab1"', content)
             self.assertIn("CONFIG_KSU=y", content)
             self.assertEqual(record["variant_id"], "builtin-image")
             self.assertEqual(record["backend"], "kleaf-defconfig-fragment-arm64-v1")

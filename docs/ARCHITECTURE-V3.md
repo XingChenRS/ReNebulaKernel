@@ -73,9 +73,9 @@ Kleaf LKM 必须把唯一 `drivers/kernelsu/kernelsu.ko` 精确加入 `module_im
 
 ## 5. 版本契约
 
-Google 基础 release 永远从同步后的 `common/Makefile` 读取。唯一写入者 `configure_variant.py` 只追加 ReNebula 管理后缀和可选用户标签，不修改 `scripts/setlocalversion`，也不允许 Root/feature adapter 写 `CONFIG_LOCALVERSION`。
+Google 基础 release 永远从同步后的 `common/Makefile` 读取。唯一写入者 `configure_variant.py` 只追加紧凑的 `-RN4-...` 管理后缀和可选用户标签，不重复 Android/KMI 信息，不修改 `scripts/setlocalversion`，也不允许 Root/feature adapter 写 `CONFIG_LOCALVERSION`。
 
-`uname_tag` 不带前导横线；resolver 负责校验安全字符、重复 base 和 64 字节限制，随后系统以 `-<tag>` 形式追加。产物名称与 `uname -r` 分离，最终值由构建产物再次验证。
+`uname_tag` 不带前导横线；resolver 负责校验安全字符、重复 base，并为 Google localversion 预留 Kleaf 25 字节或 legacy 32 字节后再执行 64 字节限制，随后系统以 `-<tag>` 形式追加。所有后端都按“基础 release + Google 中间段 + ReNebula 后缀”验收；产物名称与 `uname -r` 分离，最终值由构建产物再次验证。
 
 ## 6. 验证等级
 

@@ -213,10 +213,11 @@ jobs:
           clang="$(find "$GITHUB_WORKSPACE/kernel/prebuilts/clang/host/linux-x86" -type f -path '*/bin/clang' | sort -V | tail -n 1)"
           test -x "$clang"
           clang_bin="$(dirname "$clang")"
-          if [ ! -e "$clang_bin/aarch64-linux-android35-clang" ]; then
-            ln -s clang "$clang_bin/aarch64-linux-android35-clang"
-          fi
-          make -C "$kpm_dir/kernel" TARGET_COMPILE="$clang_bin"
+          "$clang" --target=aarch64-linux-android35 -dM -E -x c /dev/null \
+            | grep -qx '#define __aarch64__ 1'
+          make -C "$kpm_dir/kernel" \
+            TARGET_COMPILE="$clang_bin" \
+            CC="$clang --target=aarch64-linux-android35"
           make -C "$kpm_dir/tools"
           test -s "$kpm_dir/kernel/kpimg"
           test -x "$kpm_dir/tools/kptools"

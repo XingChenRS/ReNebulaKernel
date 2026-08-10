@@ -126,7 +126,12 @@ class ResolvePlanTests(unittest.TestCase):
         self.assertEqual(plan["version"]["user_suffix"], "-MLXC_RENB")
         for variant in plan["variants"]:
             self.assertTrue(variant["version"]["local_suffix"].endswith("-MLXC_RENB"))
-            final = plan["version"]["expected_base_release"] + variant["version"]["local_suffix"]
+            self.assertTrue(variant["version"]["managed_suffix"].startswith("-RN4-"))
+            self.assertNotIn("a14-6.1", variant["version"]["managed_suffix"])
+            final = (
+                "6.1.175-android14-11-maybe-dirty"
+                + variant["version"]["local_suffix"]
+            )
             self.assertLessEqual(len(final), 64)
         for tag in ("-bad", "bad tag", "bad;tag", "6.1.175", "a" * 65):
             with self.subTest(tag=tag), self.assertRaises(resolve_plan.PlanError):
@@ -136,6 +141,24 @@ class ResolvePlanTests(unittest.TestCase):
                     "sukisu",
                     uname_tag=tag,
                 )
+        legacy = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_for("android12-5.10"),
+            "sukisu",
+            susfs=True,
+            kpm=True,
+            vivo_vermagic=True,
+            uname_tag="MLXC_RENB",
+        )
+        self.assertTrue(
+            all(
+                len(legacy["version"]["expected_base_release"])
+                + variant["version"]["google_localversion_budget"]
+                + len(variant["version"]["local_suffix"])
+                <= 64
+                for variant in legacy["variants"]
+            )
+        )
 
     def test_cli_uses_the_public_schema_5_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:

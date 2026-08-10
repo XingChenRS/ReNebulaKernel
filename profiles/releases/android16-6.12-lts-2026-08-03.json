@@ -7,6 +7,6 @@
   "state": "source-locked",
   "version": {
     "expected_base_release": "6.12.92",
-    "local_suffix_prefix": "-ReNebula-v4-a16-6.12"
+    "local_suffix_prefix": "-RN4"
   }
 }

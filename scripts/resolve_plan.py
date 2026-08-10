@@ -19,6 +19,10 @@ SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 UNAME_TAG_RE = re.compile(r"^(?:|[A-Za-z0-9][A-Za-z0-9._-]*)$")
 EXCLUDED_ROOT_RE = re.compile(r"(?:kernel.?su.?next|\bksun\b|\bksu.?next\b)", re.IGNORECASE)
 MAX_UTS_RELEASE_LENGTH = 64
+GOOGLE_LOCALVERSION_BUDGET = {
+    "kleaf-defconfig-fragment-arm64-v1": 25,
+    "legacy-build-sh-arm64-v1": 32,
+}
 RELEASE_STATES = {"source-locked", "source-verified", "image-verified", "deprecated"}
 KLEAF_ADAPTER = "kleaf-defconfig-fragment-arm64-v1"
 LEGACY_ADAPTER = "legacy-build-sh-arm64-v1"
@@ -27,7 +31,7 @@ ROOT_REPOSITORIES = {
     "sukisu": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
     "resukisu": "https://github.com/ReSukiSU/ReSukiSU.git",
 }
-PROVIDER_TOKENS = {"kernelsu": "ksu", "sukisu": "suki", "resukisu": "rsu"}
+PROVIDER_TOKENS = {"kernelsu": "k", "sukisu": "s", "resukisu": "r"}
 
 
 class PlanError(ValueError):
@@ -165,8 +169,8 @@ def load_release(
         raise PlanError("release profile.version must be an object")
     require_string(version, "expected_base_release", "release profile.version")
     prefix = require_string(version, "local_suffix_prefix", "release profile.version")
-    if not prefix.startswith("-ReNebula-v4-"):
-        raise PlanError("release local suffix prefix must be managed by ReNebula v4")
+    if prefix != "-RN4":
+        raise PlanError("release local suffix prefix must be the compact ReNebula v4 marker")
     return entry, release, path
 
 
@@ -302,28 +306,28 @@ def _variant(
     if root_source == "none":
         token = "base"
     else:
-        token = f"{PROVIDER_TOKENS[root_source]}-{'bi' if variant_id == 'builtin-image' else 'lkm'}"
+        token = f"{PROVIDER_TOKENS[root_source]}-{'b' if variant_id == 'builtin-image' else 'l'}"
         if feature_flags["susfs"]:
-            token += "-sus"
+            token += "-s"
         if feature_flags["kpm"]:
-            token += "-kpm"
+            token += "-k"
         if feature_flags["vivo_vermagic"]:
-            token += "-vivo"
+            token += "-v"
     managed_suffix = f"{prefix}-{token}"
     local_suffix = managed_suffix + user_suffix
-    if len(expected_base_release + local_suffix) > MAX_UTS_RELEASE_LENGTH:
+    google_localversion_budget = GOOGLE_LOCALVERSION_BUDGET[build_adapter]
+    if (
+        len(expected_base_release)
+        + google_localversion_budget
+        + len(local_suffix)
+        > MAX_UTS_RELEASE_LENGTH
+    ):
         raise PlanError(f"uname_tag exceeds the 64-byte UTS_RELEASE limit for {variant_id}")
-    if build_adapter == LEGACY_ADAPTER:
-        release_contract = {
-            "mode": "exact",
-            "expected_uname_release": expected_base_release + local_suffix,
-        }
-    else:
-        release_contract = {
-            "mode": "base-prefix-and-suffix",
-            "prefix": expected_base_release,
-            "suffix": local_suffix,
-        }
+    release_contract = {
+        "mode": "base-prefix-and-suffix",
+        "prefix": expected_base_release,
+        "suffix": local_suffix,
+    }
     return {
         "id": variant_id,
         "artifact": contract["artifact"],
@@ -333,6 +337,7 @@ def _variant(
         "version": {
             "managed_suffix": managed_suffix,
             "local_suffix": local_suffix,
+            "google_localversion_budget": google_localversion_budget,
             "release_contract": release_contract,
         },
     }

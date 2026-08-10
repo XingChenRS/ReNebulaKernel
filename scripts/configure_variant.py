@@ -110,7 +110,14 @@ def validate_version(plan: Dict[str, Any], variant: Dict[str, Any], observed_bas
     suffix = variant_version.get("local_suffix")
     if not isinstance(suffix, str) or not SUFFIX_RE.fullmatch(suffix):
         raise ConfigurationError("variant local_suffix is invalid")
-    if observed_base in suffix or len(observed_base + suffix) > MAX_UTS_RELEASE_LENGTH:
+    google_budget = variant_version.get("google_localversion_budget")
+    if (
+        not isinstance(google_budget, int)
+        or isinstance(google_budget, bool)
+        or google_budget < 1
+        or observed_base in suffix
+        or len(observed_base) + google_budget + len(suffix) > MAX_UTS_RELEASE_LENGTH
+    ):
         raise ConfigurationError("variant local_suffix violates the UTS_RELEASE contract")
     return suffix
 

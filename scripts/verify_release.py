@@ -96,22 +96,27 @@ def validate_plan(
     release_contract = variant_version.get("release_contract")
     if not isinstance(suffix, str) or not suffix.startswith("-"):
         raise ContractError("variant local_suffix is invalid")
-    if observed_base_release in suffix or len(observed_base_release + suffix) > MAX_UTS_RELEASE_LENGTH:
+    google_budget = variant_version.get("google_localversion_budget")
+    if (
+        not isinstance(google_budget, int)
+        or isinstance(google_budget, bool)
+        or google_budget < 1
+        or observed_base_release in suffix
+        or len(observed_base_release) + google_budget + len(suffix)
+        > MAX_UTS_RELEASE_LENGTH
+    ):
         raise ContractError("variant local_suffix violates UTS_RELEASE boundaries")
     if not isinstance(release_contract, dict):
         raise ContractError("variant release_contract must be an object")
     adapter = build.get("adapter")
     mode = release_contract.get("mode")
-    if adapter == LEGACY_ADAPTER:
-        if mode != "exact" or release_contract.get("expected_uname_release") != observed_base_release + suffix:
-            raise ContractError("legacy variant must use the exact uname contract")
-    elif adapter == KLEAF_ADAPTER:
+    if adapter in {LEGACY_ADAPTER, KLEAF_ADAPTER}:
         if (
             mode != "base-prefix-and-suffix"
             or release_contract.get("prefix") != observed_base_release
             or release_contract.get("suffix") != suffix
         ):
-            raise ContractError("Kleaf variant has an invalid uname boundary contract")
+            raise ContractError("variant has an invalid uname boundary contract")
     else:
         raise ContractError(f"unsupported build adapter: {adapter}")
     return suffix, adapter, release_contract, variant

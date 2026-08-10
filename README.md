@@ -41,7 +41,7 @@ KSU debug 固定关闭，不再作为用户选项。linkage、hook 和内部 Kco
 
 六项公开输入先被 `scripts/resolve_plan.py` 编译为 schema-5 `build-plan.json`。计划固定 Google source lock、Root/feature source lock、变体、配置和版本契约；后续步骤只消费计划，不再重新解释表单输入，也不会跟随浮动分支。
 
-版本只由 `scripts/configure_variant.py` 写入。`uname_tag` 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能带前导横线、重复基础 release 或突破 64 字节 `UTS_RELEASE` 限制。
+版本只由 `scripts/configure_variant.py` 写入。管理后缀使用不重复 Android/KMI 信息的紧凑 `-RN4-...` 格式；`uname_tag` 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能带前导横线、重复基础 release，且必须在为 Google localversion 预留空间后仍满足 64 字节 `UTS_RELEASE` 限制。
 
 ## 本地静态验证
 

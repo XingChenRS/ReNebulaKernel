@@ -61,12 +61,16 @@ class VerifyReleaseTests(unittest.TestCase):
                 ])
             self.assertEqual(result, 2)
 
-    def test_legacy_release_must_match_exactly(self):
+    def test_legacy_release_accepts_google_scm_segment(self):
         plan = resolve_plan.resolve_plan(
             self.REPO_ROOT, self.release_id("android13-5.15"), "kernelsu"
         )
         variant = next(item for item in plan["variants"] if item["id"] == "lkm-module")
-        expected = variant["version"]["release_contract"]["expected_uname_release"]
+        expected = (
+            plan["version"]["expected_base_release"]
+            + "-android13-8-g61d896ee2a80-dirty"
+            + variant["version"]["local_suffix"]
+        )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             plan_path, makefile = self.write_inputs(root, plan)
