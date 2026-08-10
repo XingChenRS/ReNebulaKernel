@@ -272,6 +272,59 @@ class FeatureAdapterTests(unittest.TestCase):
             self.assertIn("#ifdef ANDROID", adapted)
             self.assertIn("user report event", adapted)
 
+    def test_sukisu_kpm_bridge_compiles_the_symbol_resolver_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            kernel = Path(temporary) / "kernel"
+            init = kernel / "core" / "init.c"
+            init.parent.mkdir(parents=True)
+            kbuild = kernel / "Kbuild"
+            kbuild.write_text(
+                "kernelsu-objs += infra/file_wrapper.o\n"
+                "kernelsu-objs += infra/event_queue.o\n"
+                "kernelsu-objs += infra/seccomp_cache.o\n"
+                "kernelsu-objs += infra/su_mount_ns.o\n\n"
+                "obj-$(CONFIG_KPM) += kpm/compact.o\n",
+                encoding="utf-8",
+            )
+            init.write_text(
+                '#include "hook/setuid_hook.h"\n'
+                '#include "feature/sucompat.h"\n\n'
+                "int __init kernelsu_init(void)\n"
+                "{\n"
+                "    ksu_cred = prepare_creds();\n"
+                "    if (!ksu_cred) {\n"
+                '        pr_err("prepare cred failed!\\n");\n'
+                "        return -ENOSYS;\n"
+                "    }\n\n"
+                "    ksu_feature_init();\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            apply_feature_adapter.adapt_sukisu_kpm_bridge(kernel)
+
+            content = kbuild.read_text(encoding="utf-8")
+            self.assertEqual(content.count("kernelsu-objs += infra/symbol_resolver.o"), 1)
+            self.assertLess(
+                content.index("kernelsu-objs += infra/symbol_resolver.o"),
+                content.index("obj-$(CONFIG_KPM) += kpm/compact.o"),
+            )
+            adapted_init = init.read_text(encoding="utf-8")
+            self.assertEqual(adapted_init.count('#include "infra/symbol_resolver.h"'), 1)
+            self.assertEqual(adapted_init.count("    ksu_init_symbol_resolver();"), 1)
+
+            apply_feature_adapter.adapt_sukisu_kpm_bridge(kernel)
+            self.assertEqual(
+                kbuild.read_text(encoding="utf-8").count(
+                    "kernelsu-objs += infra/symbol_resolver.o"
+                ),
+                1,
+            )
+            self.assertEqual(
+                init.read_text(encoding="utf-8").count("    ksu_init_symbol_resolver();"),
+                1,
+            )
+
     def test_vivo_scope_is_rejected_even_if_a_plan_is_tampered(self):
         plan = resolve_plan.resolve_plan(
             self.REPO_ROOT, self.release_id("android15-6.6"), "resukisu"

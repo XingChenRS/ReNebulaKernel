@@ -456,7 +456,66 @@ def adapt_kpm_source(makefile: Path, user_event: Path) -> None:
     user_event.write_text(events, encoding="utf-8", newline="\n")
 
 
+def adapt_sukisu_kpm_bridge(provider_kernel: Path) -> None:
+    """Preserve SukiSU's symbol resolver across its SUSFS compatibility patch."""
+    kbuild = provider_kernel / "Kbuild"
+    init = provider_kernel / "core" / "init.c"
+    try:
+        content = kbuild.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read SukiSU Kbuild {kbuild}: {error}") from error
+    resolver = "kernelsu-objs += infra/symbol_resolver.o"
+    count = content.count(resolver)
+    if count > 1:
+        raise FeatureError("SukiSU symbol-resolver Kbuild entry is duplicated")
+    if count == 0:
+        anchor = "kernelsu-objs += infra/su_mount_ns.o\n"
+        if content.count(anchor) != 1:
+            raise FeatureError("locked SukiSU symbol-resolver Kbuild anchor drifted")
+        content = content.replace(anchor, f"{anchor}{resolver}\n", 1)
+        kbuild.write_text(content, encoding="utf-8", newline="\n")
+
+    try:
+        init_content = init.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read SukiSU init source {init}: {error}") from error
+    resolver_include = '#include "infra/symbol_resolver.h"'
+    include_count = init_content.count(resolver_include)
+    if include_count > 1:
+        raise FeatureError("SukiSU symbol-resolver include is duplicated")
+    if include_count == 0:
+        include_anchor = '#include "feature/sucompat.h"\n'
+        if init_content.count(include_anchor) != 1:
+            raise FeatureError("locked SukiSU symbol-resolver include anchor drifted")
+        init_content = init_content.replace(
+            include_anchor, f"{include_anchor}{resolver_include}\n", 1
+        )
+    resolver_init = "    ksu_init_symbol_resolver();"
+    init_count = init_content.count(resolver_init)
+    if init_count > 1:
+        raise FeatureError("SukiSU symbol-resolver initialization is duplicated")
+    if init_count == 0:
+        init_anchor = (
+            "    if (!ksu_cred) {\n"
+            '        pr_err("prepare cred failed!\\n");\n'
+            "        return -ENOSYS;\n"
+            "    }\n"
+        )
+        if init_content.count(init_anchor) != 1:
+            raise FeatureError("locked SukiSU symbol-resolver initialization anchor drifted")
+        init_content = init_content.replace(
+            init_anchor, f"{init_anchor}\n{resolver_init}\n", 1
+        )
+    init.write_text(init_content, encoding="utf-8", newline="\n")
+
+
 def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
+    if plan.get("selection", {}).get("root_source") != "sukisu":
+        raise FeatureError("KPM preparation requires the SukiSU provider bridge")
+    provider_kernel = workspace / "KernelSU" / "kernel"
+    if not (provider_kernel / "infra" / "symbol_resolver.c").is_file():
+        raise FeatureError("locked SukiSU source lacks its KPM symbol resolver")
+    adapt_sukisu_kpm_bridge(provider_kernel)
     source = plan["features"]["kpm"].get("source")
     if not isinstance(source, dict):
         raise FeatureError("KPM plan is missing locked source provenance")
@@ -473,6 +532,7 @@ def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
         "commit": source["commit"],
         "checkout": str(checkout),
         "source_adapter": "sukisu-android-kpm-no-ap-callbacks-v1",
+        "provider_bridge_adapter": "sukisu-susfs-kpm-symbol-resolver-v1",
         "post_build": True,
     }
 
