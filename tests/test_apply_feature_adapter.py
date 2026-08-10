@@ -68,10 +68,33 @@ class FeatureAdapterTests(unittest.TestCase):
 
     def test_susfs_has_explicit_provider_strategies(self):
         self.assertEqual(apply_feature_adapter.susfs_provider_strategy("kernelsu"), "official-kernelsu-patch")
-        self.assertEqual(apply_feature_adapter.susfs_provider_strategy("sukisu"), "sukisu-reject-adapter-v1")
+        self.assertEqual(apply_feature_adapter.susfs_provider_strategy("sukisu"), "sukisu-reject-adapter-v2")
         self.assertEqual(apply_feature_adapter.susfs_provider_strategy("resukisu"), "provider-native-integration")
         with self.assertRaises(apply_feature_adapter.FeatureError):
             apply_feature_adapter.susfs_provider_strategy("kernelsu-next")
+
+    def test_sukisu_susfs_selinux_wrappers_are_direct_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "selinux_hide.c"
+            source.write_text(
+                "    if (security_dump_masked_av_fn)\n"
+                "        security_dump_masked_av_fn(policydb, scontext, tcontext, tclass, masked, \"bounds\");\n\n"
+                "    if (context_struct_compute_av_fn) {\n"
+                "        context_struct_compute_av_fn(policydb, scontext, tcontext, tclass, avd, NULL);\n"
+                "    } else {\n"
+                "        context_struct_compute_av(policydb, scontext, tcontext, tclass, avd, NULL);\n"
+                "    }\n",
+                encoding="utf-8",
+            )
+
+            apply_feature_adapter.adapt_sukisu_susfs_selinux_wrappers(source)
+
+            adapted = source.read_text(encoding="utf-8")
+            self.assertNotIn("if (security_dump_masked_av_fn)", adapted)
+            self.assertNotIn("if (context_struct_compute_av_fn)", adapted)
+            self.assertNotIn("context_struct_compute_av(policydb", adapted)
+            self.assertEqual(adapted.count("security_dump_masked_av_fn(policydb"), 1)
+            self.assertEqual(adapted.count("context_struct_compute_av_fn(policydb"), 1)
 
     def test_android14_6_1_common_reject_is_resolved_against_google_trace_include(self):
         adapter = getattr(apply_feature_adapter, "finish_common_susfs_reject_adapter", None)

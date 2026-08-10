@@ -137,7 +137,7 @@ def apply_vivo_vermagic(path: Path) -> Dict[str, str]:
 def susfs_provider_strategy(provider: str) -> str:
     strategies = {
         "kernelsu": "official-kernelsu-patch",
-        "sukisu": "sukisu-reject-adapter-v1",
+        "sukisu": "sukisu-reject-adapter-v2",
         "resukisu": "provider-native-integration",
     }
     try:
@@ -294,6 +294,27 @@ def apply_common_susfs_patch(common: Path, patch: Path, family: str) -> str:
     return "audited-google-reject-adapter-v1"
 
 
+def adapt_sukisu_susfs_selinux_wrappers(source: Path) -> None:
+    """Use the non-optional wrappers installed by the locked SUSFS common patch."""
+    replace_once(
+        source,
+        "    if (security_dump_masked_av_fn)\n"
+        '        security_dump_masked_av_fn(policydb, scontext, tcontext, tclass, masked, "bounds");\n',
+        '    security_dump_masked_av_fn(policydb, scontext, tcontext, tclass, masked, "bounds");\n',
+        "SukiSU security_dump_masked_av SUSFS wrapper",
+    )
+    replace_once(
+        source,
+        "    if (context_struct_compute_av_fn) {\n"
+        "        context_struct_compute_av_fn(policydb, scontext, tcontext, tclass, avd, NULL);\n"
+        "    } else {\n"
+        "        context_struct_compute_av(policydb, scontext, tcontext, tclass, avd, NULL);\n"
+        "    }\n",
+        "    context_struct_compute_av_fn(policydb, scontext, tcontext, tclass, avd, NULL);\n",
+        "SukiSU context_struct_compute_av SUSFS wrapper",
+    )
+
+
 def finish_sukisu_reject_adapter(provider_checkout: Path) -> None:
     """Resolve the three audited rejects produced by the official KSU patch.
 
@@ -353,6 +374,9 @@ def finish_sukisu_reject_adapter(provider_checkout: Path) -> None:
         "int escape_to_root_for_init(void);",
         "escape_to_root_for_init signature",
     )
+    adapt_sukisu_susfs_selinux_wrappers(
+        provider_checkout / "kernel" / "feature" / "selinux_hide.c"
+    )
     for relative in sorted(SUKISU_REJECTS):
         (provider_checkout / relative).unlink()
     run(["git", "-C", str(provider_checkout), "diff", "--check"])
@@ -404,7 +428,7 @@ def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     strategy = susfs_provider_strategy(provider)
     if strategy == "official-kernelsu-patch":
         apply_git_patch(provider_checkout, provider_patch)
-    elif strategy == "sukisu-reject-adapter-v1":
+    elif strategy == "sukisu-reject-adapter-v2":
         apply_sukisu_provider_patch(provider_checkout, provider_patch)
     else:
         kconfig = provider_checkout / "kernel" / "Kconfig"
