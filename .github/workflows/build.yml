@@ -1,131 +1,240 @@
-name: Build ReNebula GKI Image
+name: ReNebula GKI 构建
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
-      plan_b64:
-        description: Canonical build plan from resolve-plan.yml
+      release_id:
+        description: 选择 Google GKI 基线；按 Android/KMI 顺序列出，表单默认不代表任何 KMI 优先级
         required: true
-        type: string
-      plan_sha256:
-        description: SHA-256 of plan_b64 before encoding
+        type: choice
+        options:
+          - android12-5.10-lts-2026-08-03
+          - android13-5.10-lts-2026-08-03
+          - android13-5.15-lts-2026-08-03
+          - android14-5.15-lts-2026-08-03
+          - android14-6.1-lts-2026-08-03
+          - android15-6.6-lts-2026-08-03
+          - android16-6.12-lts-2026-08-03
+          - android17-6.18-lts-2026-08-03
+        default: android12-5.10-lts-2026-08-03
+      root_source:
+        description: 选择 Root 实现；非 none 会自动并行产出 Built-in Image 与 LKM 模块
         required: true
+        type: choice
+        options:
+          - none
+          - kernelsu
+          - sukisu
+          - resukisu
+        default: none
+      susfs:
+        description: 为 Built-in Image 集成锁定的 SUSFS；不影响 LKM，Android 17 / 6.18 暂不支持
+        required: true
+        type: boolean
+        default: false
+      kpm:
+        description: 为 Built-in Image 执行锁定的 KPM 后处理；不影响 LKM，Android 17 / 6.18 暂不支持
+        required: true
+        type: boolean
+        default: false
+      vivo_vermagic:
+        description: 为 LKM 的 vermagic 增加 vivo 标记；始终可见，但仅 5.10、5.15、6.1 可开启，6.6 及以上会拒绝
+        required: true
+        type: boolean
+        default: false
+      uname_tag:
+        description: 可选 uname 标签，例如 MLXC_RENB；不要填写前导横线，系统只会追加且不会覆盖 Google 版本
+        required: false
         type: string
+        default: ""
 
 permissions:
   contents: read
 
+concurrency:
+  group: renebula-${{ github.repository }}-${{ inputs.release_id }}-${{ inputs.root_source }}-${{ inputs.susfs }}-${{ inputs.kpm }}-${{ inputs.vivo_vermagic }}-${{ inputs.uname_tag }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Locked Google GKI build
+  prepare:
+    name: 解析并验证构建计划
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 10
+    outputs:
+      plan_b64: ${{ steps.plan.outputs.plan_b64 }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      variants: ${{ steps.plan.outputs.variants }}
     steps:
-      - name: Check out ReNebula definition
+      - name: 检出 ReNebula 定义
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Restore and validate the immutable plan
+      - name: 解析六项公开输入并执行静态门禁
         id: plan
         env:
-          PLAN_B64: ${{ inputs.plan_b64 }}
-          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          ROOT_SOURCE: ${{ inputs.root_source }}
+          SUSFS: ${{ inputs.susfs }}
+          KPM: ${{ inputs.kpm }}
+          VIVO_VERMAGIC: ${{ inputs.vivo_vermagic }}
+          UNAME_TAG: ${{ inputs.uname_tag }}
+          PLAN_PATH: ${{ runner.temp }}/build-plan.json
         shell: bash
         run: |
           set -euo pipefail
+          python3 scripts/validate_repository.py
+          python3 scripts/resolve_plan.py \
+            --release-id "$RELEASE_ID" \
+            --root-source "$ROOT_SOURCE" \
+            --susfs "$SUSFS" \
+            --kpm "$KPM" \
+            --vivo-vermagic "$VIVO_VERMAGIC" \
+            --uname-tag "$UNAME_TAG" \
+            --output "$PLAN_PATH"
+          python3 scripts/validate_repository.py --plan "$PLAN_PATH"
+          test -s "$PLAN_PATH"
+          plan_size="$(wc -c < "$PLAN_PATH")"
+          test "$plan_size" -le 65536
+          plan_sha256="$(sha256sum "$PLAN_PATH" | awk '{print $1}')"
+          plan_b64="$(base64 --wrap=0 "$PLAN_PATH")"
+          variants="$(python3 - "$PLAN_PATH" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              plan = json.load(handle)
+          print(json.dumps([{"id": item["id"]} for item in plan["variants"]], separators=(",", ":")))
+          PY
+          )"
+          printf 'plan_sha256=%s\n' "$plan_sha256" >> "$GITHUB_OUTPUT"
+          printf 'plan_b64=%s\n' "$plan_b64" >> "$GITHUB_OUTPUT"
+          printf 'variants=%s\n' "$variants" >> "$GITHUB_OUTPUT"
 
+  build:
+    name: ${{ matrix.variant.id }} · ${{ inputs.release_id }} · ${{ inputs.root_source }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(needs.prepare.outputs.variants) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: 检出 ReNebula 定义
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: 恢复已验证计划并读取当前产物契约
+        id: plan
+        env:
+          PLAN_B64: ${{ needs.prepare.outputs.plan_b64 }}
+          PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
+          VARIANT_ID: ${{ matrix.variant.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
           plan_path="$GITHUB_WORKSPACE/build-plan.json"
           printf '%s' "$PLAN_B64" | base64 --decode > "$plan_path"
           actual_sha256="$(sha256sum "$plan_path" | awk '{print $1}')"
-          if [ "$actual_sha256" != "$PLAN_SHA256" ]; then
-            echo "build plan digest mismatch" >&2
-            exit 1
-          fi
-
+          test "$actual_sha256" = "$PLAN_SHA256"
           python3 scripts/validate_repository.py --plan "$plan_path"
-
-          python3 - "$plan_path" >> "$GITHUB_OUTPUT" <<'PY'
+          python3 - "$plan_path" "$VARIANT_ID" >> "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
-
           with open(sys.argv[1], encoding="utf-8") as handle:
               plan = json.load(handle)
-
+          matches = [item for item in plan["variants"] if item["id"] == sys.argv[2]]
+          if len(matches) != 1:
+              raise SystemExit("variant is not present exactly once")
+          variant = matches[0]
           selection = plan["selection"]
-          source = plan["source"]
           build = plan["build"]
           print(f"release_id={selection['release_id']}")
-          print(f"lock_id={source['lock_id']}")
+          print(f"lock_id={plan['source']['lock_id']}")
+          print(f"root_source={selection['root_source']}")
           print(f"adapter={build['adapter']}")
-          print(f"root_provider={selection['root_provider']}")
-          print(f"root_linkage={selection['root_linkage']}")
-          print(f"hook_mode={selection['hook_mode']}")
-          print(f"config_profile={selection['config_profile']}")
-          print(f"uname_suffix={selection['uname_suffix']}")
           print(f"image_name={build['image_name']}")
           print(f"bazel_target={build.get('bazel_target', '')}")
           print(f"build_config={build.get('build_config', '')}")
+          print(f"variant_id={variant['id']}")
+          print(f"artifact={variant['artifact']}")
+          for name, enabled in variant["features"].items():
+              print(f"variant_{name}={'true' if enabled else 'false'}")
           PY
 
-      - name: Synchronize the locked Google GKI source tree
+      - name: 同步锁定的 Google GKI 源码
         env:
           LOCK_ID: ${{ steps.plan.outputs.lock_id }}
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/sync_google_gki.py --lock-id "$LOCK_ID" --workspace "$GITHUB_WORKSPACE/kernel"
+          python3 scripts/sync_google_gki.py \
+            --lock-id "$LOCK_ID" \
+            --workspace "$GITHUB_WORKSPACE/kernel"
 
-      - name: Apply the locked root adapter
+      - name: 接入锁定的 Root provider
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/apply_root_adapter.py \
             --plan "$GITHUB_WORKSPACE/build-plan.json" \
+            --variant-id "${{ matrix.variant.id }}" \
             --kernel-workspace "$GITHUB_WORKSPACE/kernel"
 
-      - name: Apply the version and configuration contract
-        env:
-          ADAPTER: ${{ steps.plan.outputs.adapter }}
+      - name: 准备当前 variant 的 SUSFS、KPM 或 Vivo 适配
         shell: bash
         run: |
           set -euo pipefail
-          case "$ADAPTER" in
-            kleaf-defconfig-fragment-arm64-v1)
-              python3 scripts/verify_release.py \
-                --plan "$GITHUB_WORKSPACE/build-plan.json" \
-                --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
-                --write-fragment "$GITHUB_WORKSPACE/kernel/renebula/localversion_defconfig" \
-                --write-build-file "$GITHUB_WORKSPACE/kernel/renebula/BUILD.bazel"
-              ;;
-            legacy-build-sh-arm64-v1)
-              python3 scripts/verify_release.py \
-                --plan "$GITHUB_WORKSPACE/build-plan.json" \
-                --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
-                --write-legacy-script "$GITHUB_WORKSPACE/kernel/renebula/apply-localversion.sh" \
-                --write-legacy-build-config "$GITHUB_WORKSPACE/kernel/renebula/localversion.build.config"
-              ;;
-            *)
-              echo "unsupported build adapter: $ADAPTER" >&2
-              exit 1
-              ;;
-          esac
+          python3 scripts/apply_feature_adapter.py \
+            --plan "$GITHUB_WORKSPACE/build-plan.json" \
+            --variant-id "${{ matrix.variant.id }}" \
+            --kernel-workspace "$GITHUB_WORKSPACE/kernel" \
+            --phase prepare
 
-      - name: Build the Kleaf arm64 GKI Image with a defconfig fragment
+      - name: 生成唯一的 Kconfig 与 LOCALVERSION 输入
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/configure_variant.py \
+            --plan "$GITHUB_WORKSPACE/build-plan.json" \
+            --variant-id "${{ matrix.variant.id }}" \
+            --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
+            --output-root "$GITHUB_WORKSPACE/kernel/renebula"
+
+      - name: 构建锁定的 KPM 工具
+        if: steps.plan.outputs.variant_kpm == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          kpm_dir="$GITHUB_WORKSPACE/kernel/.renebula-features/kpm"
+          clang="$(find "$GITHUB_WORKSPACE/kernel/prebuilts/clang/host/linux-x86" -type f -path '*/bin/clang' | sort -V | tail -n 1)"
+          test -x "$clang"
+          clang_bin="$(dirname "$clang")"
+          if [ ! -e "$clang_bin/aarch64-linux-android35-clang" ]; then
+            ln -s clang "$clang_bin/aarch64-linux-android35-clang"
+          fi
+          make -C "$kpm_dir/kernel" TARGET_COMPILE="$clang_bin"
+          make -C "$kpm_dir/tools"
+          test -s "$kpm_dir/kernel/kpimg"
+          test -x "$kpm_dir/tools/kptools"
+
+      - name: 使用 Kleaf 构建 arm64 GKI
         if: steps.plan.outputs.adapter == 'kleaf-defconfig-fragment-arm64-v1'
         env:
           BAZEL_TARGET: ${{ steps.plan.outputs.bazel_target }}
         shell: bash
         run: |
           set -euo pipefail
-          dist_dir="$GITHUB_WORKSPACE/renebula-dist"
-          mkdir -p "$dist_dir"
+          mkdir -p "$GITHUB_WORKSPACE/renebula-dist"
           cd "$GITHUB_WORKSPACE/kernel"
           tools/bazel run --defconfig_fragment=//renebula:localversion_defconfig \
-            "$BAZEL_TARGET" -- --destdir="$dist_dir" 2>&1 | tee "$RUNNER_TEMP/build.log"
+            "$BAZEL_TARGET" -- --destdir="$GITHUB_WORKSPACE/renebula-dist" \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
 
-      - name: Build the legacy arm64 GKI Image
+      - name: 使用 legacy build.sh 构建 arm64 GKI
         if: steps.plan.outputs.adapter == 'legacy-build-sh-arm64-v1'
         env:
           BUILD_CONFIG: ${{ steps.plan.outputs.build_config }}
@@ -133,68 +242,103 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dist_dir="$GITHUB_WORKSPACE/renebula-dist"
-          out_dir="$GITHUB_WORKSPACE/renebula-out"
-          mkdir -p "$dist_dir" "$out_dir"
+          mkdir -p "$GITHUB_WORKSPACE/renebula-dist" "$GITHUB_WORKSPACE/renebula-out"
           cd "$GITHUB_WORKSPACE/kernel"
           BUILD_CONFIG="$BUILD_CONFIG" \
             BUILD_CONFIG_FRAGMENTS="$BUILD_CONFIG_FRAGMENTS" \
-            OUT_DIR="$out_dir" \
-            DIST_DIR="$dist_dir" \
+            OUT_DIR="$GITHUB_WORKSPACE/renebula-out" \
+            DIST_DIR="$GITHUB_WORKSPACE/renebula-dist" \
             build/build.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
 
-      - name: Verify the release embedded in the Image
+      - name: 验证并整理 Image 或 kernelsu.ko
         env:
+          VARIANT_ID: ${{ matrix.variant.id }}
+          ARTIFACT_KIND: ${{ steps.plan.outputs.artifact }}
           IMAGE_NAME: ${{ steps.plan.outputs.image_name }}
+          KPM_ENABLED: ${{ steps.plan.outputs.variant_kpm }}
         shell: bash
         run: |
           set -euo pipefail
-          image="$GITHUB_WORKSPACE/renebula-dist/$IMAGE_NAME"
-          test -f "$image"
-          python3 scripts/verify_release.py \
-            --plan "$GITHUB_WORKSPACE/build-plan.json" \
-            --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
-            --image "$image" \
-            --record "$RUNNER_TEMP/build-record.json"
-
-      - name: Verify the selected root module
-        if: steps.plan.outputs.root_provider == 'resukisu' && steps.plan.outputs.root_linkage == 'lkm'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t root_modules < <(find "$GITHUB_WORKSPACE/renebula-dist" -type f -name kernelsu.ko -print)
-          if [ "${#root_modules[@]}" -ne 1 ]; then
-            printf 'expected exactly one ReSukiSU LKM, found %s\n' "${#root_modules[@]}" >&2
-            printf '%s\n' "${root_modules[@]:-}" >&2
-            exit 1
+          final_dir="$GITHUB_WORKSPACE/renebula-final"
+          mkdir -p "$final_dir"
+          if [ "$ARTIFACT_KIND" = "module" ]; then
+            mapfile -t modules < <(find "$GITHUB_WORKSPACE/renebula-dist" -type f -name kernelsu.ko -print)
+            if [ "${#modules[@]}" -ne 1 ]; then
+              printf 'expected exactly one kernelsu.ko, found %s\n' "${#modules[@]}" >&2
+              exit 1
+            fi
+            python3 scripts/verify_release.py \
+              --plan "$GITHUB_WORKSPACE/build-plan.json" \
+              --variant-id "$VARIANT_ID" \
+              --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
+              --module "${modules[0]}" \
+              --record "$RUNNER_TEMP/build-record.json"
+            cp "${modules[0]}" "$final_dir/kernelsu.ko"
+          else
+            image="$GITHUB_WORKSPACE/renebula-dist/$IMAGE_NAME"
+            test -f "$image"
+            final_image="$image"
+            if [ "$KPM_ENABLED" = "true" ]; then
+              kpm_dir="$GITHUB_WORKSPACE/kernel/.renebula-features/kpm"
+              final_image="$GITHUB_WORKSPACE/renebula-dist/Image-kpm"
+              python3 scripts/apply_feature_adapter.py \
+                --plan "$GITHUB_WORKSPACE/build-plan.json" \
+                --variant-id "$VARIANT_ID" \
+                --kernel-workspace "$GITHUB_WORKSPACE/kernel" \
+                --phase patch-kpm-image \
+                --image "$image" \
+                --output-image "$final_image" \
+                --kptools "$kpm_dir/tools/kptools" \
+                --kpimg "$kpm_dir/kernel/kpimg"
+            fi
+            python3 scripts/verify_release.py \
+              --plan "$GITHUB_WORKSPACE/build-plan.json" \
+              --variant-id "$VARIANT_ID" \
+              --makefile "$GITHUB_WORKSPACE/kernel/common/Makefile" \
+              --image "$final_image" \
+              --record "$RUNNER_TEMP/build-record.json"
+            cp "$final_image" "$final_dir/$(basename "$final_image")"
           fi
-          sha256sum "${root_modules[0]}" > "$RUNNER_TEMP/root-module.sha256"
 
-      - name: Collect patch diagnostics
+      - name: 收集补丁诊断
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           if [ -d "$GITHUB_WORKSPACE/kernel" ]; then
-            find "$GITHUB_WORKSPACE/kernel" -name '*.rej' -type f -print > "$RUNNER_TEMP/patch-rejects.txt"
+            find "$GITHUB_WORKSPACE/kernel" -type f -name '*.rej' -print > "$RUNNER_TEMP/patch-rejects.txt"
           else
             : > "$RUNNER_TEMP/patch-rejects.txt"
           fi
 
-      - name: Upload build provenance and diagnostics
-        if: always()
+      - name: 上传成功产物与完整溯源
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: renebula-${{ steps.plan.outputs.release_id }}-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
+          name: renebula-${{ steps.plan.outputs.release_id }}-${{ steps.plan.outputs.root_source }}-${{ matrix.variant.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}/build.log
+            renebula-final/*
             build-plan.json
             ${{ runner.temp }}/build-record.json
-            ${{ runner.temp }}/root-module.sha256
-            ${{ runner.temp }}/patch-rejects.txt
-            renebula-dist/Image
-            renebula-dist/**/kernelsu.ko
             kernel/renebula-source-record.json
             kernel/renebula-root-record.json
+            kernel/renebula-feature-record.json
+            kernel/renebula-kpm-record.json
+            kernel/renebula/renebula-config-record.json
+
+      - name: 上传失败日志
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: renebula-failure-${{ matrix.variant.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/patch-rejects.txt
+            build-plan.json
+            kernel/renebula-source-record.json
+            kernel/renebula-root-record.json
+            kernel/renebula-feature-record.json

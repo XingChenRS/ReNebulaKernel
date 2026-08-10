@@ -1,9 +1,12 @@
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -17,59 +20,77 @@ from sync_google_gki import canonical_json  # noqa: E402
 class RepositoryContractTests(unittest.TestCase):
     REPO_ROOT = Path(__file__).resolve().parents[1]
 
-    def write_plan(self, temporary: Path, *selection: str, uname_suffix: str = "") -> Path:
-        plan = resolve_plan.resolve_plan(self.REPO_ROOT, *selection, uname_suffix)
-        path = temporary / "build-plan.json"
-        path.write_bytes(canonical_json(plan) + b"\n")
-        return path
+    def workflow(self):
+        path = self.REPO_ROOT / ".github" / "workflows" / "build.yml"
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
-    def test_static_gate_accepts_the_entire_four_dimensional_registry(self):
+    def release_id(self):
+        registry, _ = resolve_plan.load_registry(self.REPO_ROOT)
+        return next(item["id"] for item in registry["releases"] if item["family_id"] == "android14-6.1")
+
+    def test_repository_has_one_manually_dispatched_workflow(self):
+        workflows = sorted((self.REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+        self.assertEqual([path.name for path in workflows], ["build.yml"])
+        document = self.workflow()
+        self.assertEqual(set(document["on"]), {"workflow_dispatch"})
+
+    def test_workflow_exposes_only_the_six_public_inputs(self):
+        inputs = self.workflow()["on"]["workflow_dispatch"]["inputs"]
+        self.assertEqual(
+            list(inputs),
+            ["release_id", "root_source", "susfs", "kpm", "vivo_vermagic", "uname_tag"],
+        )
+        self.assertEqual(inputs["root_source"]["options"], ["none", "kernelsu", "sukisu", "resukisu"])
+        self.assertEqual(inputs["root_source"]["default"], "none")
+        for name in ("susfs", "kpm", "vivo_vermagic"):
+            self.assertEqual(inputs[name]["type"], "boolean")
+            self.assertEqual(inputs[name]["default"], "false")
+        self.assertIn("6.6", inputs["vivo_vermagic"]["description"])
+        for value in inputs.values():
+            self.assertTrue(any(ord(char) > 127 for char in value["description"]))
+
+    def test_workflow_builds_the_verified_variant_matrix(self):
+        workflow_text = (self.REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+        self.assertIn("fromJSON(needs.prepare.outputs.variants)", workflow_text)
+        self.assertIn("matrix.variant.id", workflow_text)
+        self.assertIn("scripts/apply_root_adapter.py", workflow_text)
+        self.assertIn("scripts/apply_feature_adapter.py", workflow_text)
+        self.assertIn("scripts/configure_variant.py", workflow_text)
+        self.assertIn("scripts/verify_release.py", workflow_text)
+        self.assertNotIn("root_linkage:", workflow_text.split("jobs:", 1)[0])
+        self.assertNotIn("hook_mode:", workflow_text.split("jobs:", 1)[0])
+
+    def test_static_gate_accepts_catalog_and_exact_custom_plan(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(validate_repository.main(["--repo-root", str(self.REPO_ROOT)]), 0)
-        tuples = resolve_plan.registered_selector_tuples(self.REPO_ROOT)
-        self.assertEqual(len(tuples), 36)
-
-    def test_static_gate_accepts_an_exact_custom_uname_plan(self):
-        release_id = next(
-            release_id
-            for release_id, provider, linkage, hook, profile in resolve_plan.registered_selector_tuples(
-                self.REPO_ROOT
-            )
-            if (provider, linkage, hook, profile)
-            == ("resukisu", "lkm", "tracepoint", "debug")
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_id(),
+            "sukisu",
+            susfs=True,
+            kpm=True,
+            vivo_vermagic=True,
+            uname_tag="lab1",
         )
         with tempfile.TemporaryDirectory() as temporary:
-            plan = self.write_plan(
-                Path(temporary),
-                release_id,
-                "resukisu",
-                "lkm",
-                "tracepoint",
-                "debug",
-                uname_suffix="-lab1",
-            )
+            path = Path(temporary) / "build-plan.json"
+            path.write_bytes(canonical_json(plan) + b"\n")
             with contextlib.redirect_stderr(io.StringIO()):
-                result = validate_repository.main(
-                    ["--repo-root", str(self.REPO_ROOT), "--plan", str(plan)]
-                )
-            self.assertEqual(result, 0)
+                self.assertEqual(validate_repository.main([
+                    "--repo-root", str(self.REPO_ROOT), "--plan", str(path)
+                ]), 0)
 
-    def test_static_gate_rejects_a_noncanonical_axis_change(self):
+    def test_static_gate_rejects_tampered_plan(self):
+        plan = resolve_plan.resolve_plan(self.REPO_ROOT, self.release_id(), "resukisu")
+        plan["variants"][0]["root_linkage"] = "lkm"
         with tempfile.TemporaryDirectory() as temporary:
-            plan_path = self.write_plan(
-                Path(temporary),
-                "android14-6.1-lts-2026-08-03",
-                "resukisu",
-                "builtin",
-                "tracepoint",
-                "release",
-            )
-            content = plan_path.read_text(encoding="utf-8").replace(
-                '"hook_mode":"tracepoint"', '"hook_mode":"manual"', 1
-            )
-            plan_path.write_text(content, encoding="utf-8", newline="\n")
+            path = Path(temporary) / "build-plan.json"
+            path.write_text(json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
             with contextlib.redirect_stderr(io.StringIO()):
-                result = validate_repository.main(
-                    ["--repo-root", str(self.REPO_ROOT), "--plan", str(plan_path)]
-                )
-            self.assertEqual(result, 2)
+                self.assertEqual(validate_repository.main([
+                    "--repo-root", str(self.REPO_ROOT), "--plan", str(path)
+                ]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
