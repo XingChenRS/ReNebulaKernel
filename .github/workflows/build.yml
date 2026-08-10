@@ -218,6 +218,8 @@ jobs:
           make -C "$kpm_dir/kernel" \
             TARGET_COMPILE="$clang_bin" \
             CC="$clang --target=aarch64-linux-android35"
+          cp "$kpm_dir/kernel/include/preset.h" "$kpm_dir/tools/preset.h"
+          cmp "$kpm_dir/kernel/include/preset.h" "$kpm_dir/tools/preset.h"
           make -C "$kpm_dir/tools"
           test -s "$kpm_dir/kernel/kpimg"
           test -x "$kpm_dir/tools/kptools"

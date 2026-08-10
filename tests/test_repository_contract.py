@@ -66,6 +66,8 @@ class RepositoryContractTests(unittest.TestCase):
         )
         self.assertIn('CC="$clang --target=aarch64-linux-android35"', workflow_text)
         self.assertIn("grep -qx '#define __aarch64__ 1'", workflow_text)
+        self.assertIn('cp "$kpm_dir/kernel/include/preset.h" "$kpm_dir/tools/preset.h"', workflow_text)
+        self.assertIn('cmp "$kpm_dir/kernel/include/preset.h" "$kpm_dir/tools/preset.h"', workflow_text)
         self.assertNotIn('ln -s clang "$clang_bin/aarch64-linux-android35-clang"', workflow_text)
 
     def test_static_gate_accepts_catalog_and_exact_custom_plan(self):
