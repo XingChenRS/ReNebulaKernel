@@ -1,0 +1,27 @@
+{
+  "schema": 5,
+  "kind": "build-feature",
+  "id": "susfs",
+  "adapter": "susfs4ksu-overlay-v1",
+  "variant": "builtin-image",
+  "supported_series": ["5.10", "5.15", "6.1", "6.6", "6.12"],
+  "source_locks": {
+    "android12-5.10": "susfs.android12-5.10.3c14ad54",
+    "android13-5.10": "susfs.android13-5.10.f81aaf10",
+    "android13-5.15": "susfs.android13-5.15.ccb19186",
+    "android14-5.15": "susfs.android14-5.15.0463ac08",
+    "android14-6.1": "susfs.android14-6.1.e287d590",
+    "android15-6.6": "susfs.android15-6.6.be7b7ef4",
+    "android16-6.12": "susfs.android16-6.12.f37930f3"
+  },
+  "kconfig": {
+    "KSU_SUSFS": "y",
+    "KSU_SUSFS_SUS_PATH": "y",
+    "KSU_SUSFS_SUS_MOUNT": "y",
+    "KSU_SUSFS_SUS_KSTAT": "y",
+    "KSU_SUSFS_SPOOF_UNAME": "y",
+    "KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG": "y",
+    "KSU_SUSFS_OPEN_REDIRECT": "y",
+    "KSU_SUSFS_SUS_MAP": "y"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema": 5,
+  "kind": "root-provider",
+  "id": "kernelsu",
+  "adapter": "kernelsu-driver-link-v2",
+  "source_lock": "kernelsu.main.4a5f4311",
+  "variants": {
+    "builtin-image": {"artifact": "image", "linkage": "builtin", "kconfig": {"KPROBES": "y", "EXT4_FS": "y", "KSU": "y", "KSU_DEBUG": "n"}},
+    "lkm-module": {"artifact": "module", "linkage": "lkm", "kconfig": {"KPROBES": "y", "EXT4_FS": "y", "KSU": "m", "KSU_DEBUG": "n"}}
+  }
+}

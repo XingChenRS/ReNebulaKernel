@@ -1,15 +1,33 @@
 {
-  "schema": 1,
+  "schema": 2,
   "kind": "static-root-source-locks",
   "locks": {
-    "resukisu.main.59c99fdf": {
-      "id": "resukisu.main.59c99fdf",
-      "provider": "resukisu",
-      "repository": "https://github.com/ReSukiSU/ReSukiSU.git",
-      "commit": "59c99fdf1735c37681ff18c7ffd7834741dcccbf",
+    "kernelsu.main.4a5f4311": {
+      "id": "kernelsu.main.4a5f4311",
+      "provider": "kernelsu",
+      "repository": "https://github.com/tiann/KernelSU.git",
+      "commit": "4a5f431127bb360db30088377c4374538c8d1692",
       "ref": "main",
       "source_dir": "kernel",
-      "repository_license": "GPL-3.0",
+      "kernel_license": "GPL-2.0-only"
+    },
+    "sukisu.main.35467545": {
+      "id": "sukisu.main.35467545",
+      "provider": "sukisu",
+      "repository": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
+      "commit": "35467545b2826e3acfc88699755981a889956b1a",
+      "ref": "main",
+      "source_dir": "kernel",
+      "kernel_license": "GPL-2.0-only"
+    },
+    "resukisu.main.ca62a37f": {
+      "id": "resukisu.main.ca62a37f",
+      "provider": "resukisu",
+      "repository": "https://github.com/ReSukiSU/ReSukiSU.git",
+      "commit": "ca62a37fc328e6cb836ea6d77b7eab0c073104a6",
+      "ref": "main",
+      "source_dir": "kernel",
+      "repository_license": "GPL-3.0-or-later",
       "kernel_license": "GPL-2.0-only"
     }
   }

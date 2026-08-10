@@ -1,0 +1,11 @@
+{
+  "schema": 5,
+  "kind": "root-provider",
+  "id": "sukisu",
+  "adapter": "kernelsu-driver-link-v2",
+  "source_lock": "sukisu.main.35467545",
+  "variants": {
+    "builtin-image": {"artifact": "image", "linkage": "builtin", "kconfig": {"KPROBES": "y", "EXT4_FS": "y", "KSU": "y", "KPM": "n", "KSU_DEBUG": "n"}},
+    "lkm-module": {"artifact": "module", "linkage": "lkm", "kconfig": {"KPROBES": "y", "EXT4_FS": "y", "KSU": "m", "KPM": "n", "KSU_DEBUG": "n"}}
+  }
+}

@@ -1,7 +1,10 @@
 {
-  "schema": 4,
+  "schema": 5,
   "kind": "root-provider",
   "id": "none",
   "adapter": "none",
-  "source_lock": null
+  "source_lock": null,
+  "variants": {
+    "baseline-image": {"artifact": "image", "linkage": "none", "kconfig": {}}
+  }
 }

@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "kind": "static-feature-source-locks",
+  "locks": {
+    "susfs.android12-5.10.3c14ad54": {"id": "susfs.android12-5.10.3c14ad54", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android12-5.10", "commit": "3c14ad549f826b1f53878ec8c12253efebeed75a"},
+    "susfs.android13-5.10.f81aaf10": {"id": "susfs.android13-5.10.f81aaf10", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android13-5.10", "commit": "f81aaf10e9560282052bb61dd931315c2ca3e617"},
+    "susfs.android13-5.15.ccb19186": {"id": "susfs.android13-5.15.ccb19186", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android13-5.15", "commit": "ccb1918684b27644d17a6c842f57b60ae5966025"},
+    "susfs.android14-5.15.0463ac08": {"id": "susfs.android14-5.15.0463ac08", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android14-5.15", "commit": "0463ac089308014e8c22cc6a4558e0d6d2a53e08"},
+    "susfs.android14-6.1.e287d590": {"id": "susfs.android14-6.1.e287d590", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android14-6.1", "commit": "e287d59066380bf6de4396532d4a42edf4408701"},
+    "susfs.android15-6.6.be7b7ef4": {"id": "susfs.android15-6.6.be7b7ef4", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android15-6.6", "commit": "be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1"},
+    "susfs.android16-6.12.f37930f3": {"id": "susfs.android16-6.12.f37930f3", "feature": "susfs", "repository": "https://gitlab.com/simonpunk/susfs4ksu.git", "ref": "gki-android16-6.12", "commit": "f37930f374ef88de990d6abea0c67d0ea28c1edc"},
+    "kpm.main.c5f0785d": {"id": "kpm.main.c5f0785d", "feature": "kpm", "repository": "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git", "ref": "main", "commit": "c5f0785dc7fac22a846eecc6392f34198d8e18b5", "license": "GPL-2.0-only"}
+  }
+}

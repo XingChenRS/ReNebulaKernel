@@ -1,7 +1,19 @@
 {
-  "schema": 4,
+  "schema": 5,
   "kind": "root-provider",
   "id": "resukisu",
-  "adapter": "resukisu-driver-link-v1",
-  "source_lock": "resukisu.main.59c99fdf"
+  "adapter": "kernelsu-driver-link-v2",
+  "source_lock": "resukisu.main.ca62a37f",
+  "variants": {
+    "builtin-image": {
+      "artifact": "image",
+      "linkage": "builtin",
+      "kconfig": {"KSU": "y", "KSU_TRACEPOINT_HOOK": "y", "KSU_MANUAL_HOOK": "n", "KSU_SUSFS": "n", "KSU_MULTI_MANAGER_SUPPORT": "y", "KSU_DEBUG": "n"}
+    },
+    "lkm-module": {
+      "artifact": "module",
+      "linkage": "lkm",
+      "kconfig": {"KSU": "m", "KSU_TRACEPOINT_HOOK": "y", "KSU_MANUAL_HOOK": "n", "KSU_SUSFS": "n", "KSU_MULTI_MANAGER_SUPPORT": "y", "KSU_DEBUG": "n"}
+    }
+  }
 }
