@@ -31,9 +31,13 @@
 - Create: `profiles/root-providers/sukisu.json`
 - Modify: `profiles/root-providers/resukisu.json`
 - Modify: `profiles/root-providers/none.json`
+- Create: `profiles/features/susfs.json`
+- Create: `profiles/features/kpm.json`
+- Create: `profiles/features/vivo-vermagic.json`
 - Delete: `profiles/config-profiles/release.json`
 - Delete: `profiles/config-profiles/debug.json`
 - Modify: `locks/root-sources.lock.json`
+- Create: `locks/feature-sources.lock.json`
 - Modify: `scripts/resolve_plan.py`
 - Modify: `tests/test_resolve_plan.py`
 
@@ -220,10 +224,10 @@ git commit -m "refactor: centralize variant Kconfig compilation"
 ### Task 4: Locked SUSFS, KPM, and Vivo feature adapters
 
 **Files:**
-- Create: `locks/feature-sources.lock.json`
-- Create: `profiles/features/susfs.json`
-- Create: `profiles/features/kpm.json`
-- Create: `profiles/features/vivo-vermagic.json`
+- Modify: `locks/feature-sources.lock.json`
+- Modify: `profiles/features/susfs.json`
+- Modify: `profiles/features/kpm.json`
+- Modify: `profiles/features/vivo-vermagic.json`
 - Create: `scripts/apply_feature_adapter.py`
 - Create: `tests/test_apply_feature_adapter.py`
 
