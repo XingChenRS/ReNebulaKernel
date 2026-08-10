@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -66,6 +67,25 @@ class SourceLockTests(unittest.TestCase):
 
         with self.assertRaises(sync_google_gki.LockError):
             sync_google_gki.validate_lock(lock, LOCK_ID)
+
+    def test_exact_project_fetch_retries_a_transient_transport_failure(self):
+        project = {
+            "url": "https://android.googlesource.com/kernel/common",
+            "commit": SHA1_A,
+        }
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            sync_google_gki,
+            "run",
+            side_effect=["", "", RuntimeError("fatal: early EOF"), "", ""],
+        ) as runner, patch.object(sync_google_gki.time, "sleep") as sleeper:
+            sync_google_gki.checkout_project(project, Path(temporary) / "common")
+
+        fetches = [
+            call.args[0] for call in runner.call_args_list if "fetch" in call.args[0]
+        ]
+        self.assertEqual(len(fetches), 2)
+        self.assertTrue(all(command[-1] == SHA1_A for command in fetches))
+        sleeper.assert_called_once_with(2)
 
     def test_common_must_be_a_required_materialized_project(self):
         lock = valid_lock()

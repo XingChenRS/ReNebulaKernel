@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -256,20 +257,32 @@ def checkout_project(project: Dict[str, str], destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     run(["git", "init", "-q", str(destination)])
     run(["git", "-C", str(destination), "remote", "add", "origin", project["url"]])
-    run(
-        [
-            "git",
-            "-C",
-            str(destination),
-            "-c",
-            "protocol.version=2",
-            "fetch",
-            "--no-tags",
-            "--depth=1",
-            "origin",
-            project["commit"],
-        ]
-    )
+    fetch_command = [
+        "git",
+        "-C",
+        str(destination),
+        "-c",
+        "protocol.version=2",
+        "fetch",
+        "--no-tags",
+        "--depth=1",
+        "origin",
+        project["commit"],
+    ]
+    for attempt in range(1, 4):
+        try:
+            run(fetch_command)
+            break
+        except RuntimeError:
+            if attempt == 3:
+                raise
+            delay = 2**attempt
+            print(
+                f"exact fetch failed for {project['commit']}; "
+                f"retrying attempt {attempt + 1}/3 in {delay}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
     run(["git", "-C", str(destination), "checkout", "--detach", "--quiet", "FETCH_HEAD"])
 
 
