@@ -277,6 +277,8 @@ class FeatureAdapterTests(unittest.TestCase):
             kernel = Path(temporary) / "kernel"
             init = kernel / "core" / "init.c"
             init.parent.mkdir(parents=True)
+            kpm = kernel / "kpm" / "super_access.c"
+            kpm.parent.mkdir(parents=True)
             kbuild = kernel / "Kbuild"
             kbuild.write_text(
                 "kernelsu-objs += infra/file_wrapper.o\n"
@@ -284,6 +286,17 @@ class FeatureAdapterTests(unittest.TestCase):
                 "kernelsu-objs += infra/seccomp_cache.o\n"
                 "kernelsu-objs += infra/su_mount_ns.o\n\n"
                 "obj-$(CONFIG_KPM) += kpm/compact.o\n",
+                encoding="utf-8",
+            )
+            kpm.write_text(
+                "DYNAMIC_STRUCT_BEGIN(netlink_kernel_cfg)\n"
+                "DEFINE_MEMBER(netlink_kernel_cfg, groups)\n"
+                "DEFINE_MEMBER(netlink_kernel_cfg, flags)\n"
+                "DEFINE_MEMBER(netlink_kernel_cfg, input)\n"
+                "DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)\n"
+                "DEFINE_MEMBER(netlink_kernel_cfg, bind)\n"
+                "DEFINE_MEMBER(netlink_kernel_cfg, unbind)\n"
+                "DYNAMIC_STRUCT_END(netlink_kernel_cfg)\n",
                 encoding="utf-8",
             )
             init.write_text(
@@ -312,6 +325,15 @@ class FeatureAdapterTests(unittest.TestCase):
             adapted_init = init.read_text(encoding="utf-8")
             self.assertEqual(adapted_init.count('#include "infra/symbol_resolver.h"'), 1)
             self.assertEqual(adapted_init.count("    ksu_init_symbol_resolver();"), 1)
+            adapted_kpm = kpm.read_text(encoding="utf-8")
+            self.assertEqual(
+                adapted_kpm.count(
+                    "#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)\n"
+                    "DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)\n"
+                    "#endif"
+                ),
+                1,
+            )
 
             apply_feature_adapter.adapt_sukisu_kpm_bridge(kernel)
             self.assertEqual(
@@ -322,6 +344,12 @@ class FeatureAdapterTests(unittest.TestCase):
             )
             self.assertEqual(
                 init.read_text(encoding="utf-8").count("    ksu_init_symbol_resolver();"),
+                1,
+            )
+            self.assertEqual(
+                kpm.read_text(encoding="utf-8").count(
+                    "#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)"
+                ),
                 1,
             )
 

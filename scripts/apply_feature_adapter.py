@@ -457,7 +457,7 @@ def adapt_kpm_source(makefile: Path, user_event: Path) -> None:
 
 
 def adapt_sukisu_kpm_bridge(provider_kernel: Path) -> None:
-    """Preserve SukiSU's symbol resolver across its SUSFS compatibility patch."""
+    """Preserve SukiSU's KPM bridge across known upstream compatibility regressions."""
     kbuild = provider_kernel / "Kbuild"
     init = provider_kernel / "core" / "init.c"
     try:
@@ -508,6 +508,25 @@ def adapt_sukisu_kpm_bridge(provider_kernel: Path) -> None:
         )
     init.write_text(init_content, encoding="utf-8", newline="\n")
 
+    super_access = provider_kernel / "kpm" / "super_access.c"
+    try:
+        access_content = super_access.read_text(encoding="utf-8")
+    except OSError as error:
+        raise FeatureError(f"cannot read SukiSU KPM source {super_access}: {error}") from error
+    cb_mutex = "DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)\n"
+    guarded_cb_mutex = (
+        "#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)\n"
+        f"{cb_mutex}"
+        "#endif\n"
+    )
+    if access_content.count(guarded_cb_mutex) == 0:
+        if access_content.count(cb_mutex) != 1:
+            raise FeatureError("locked SukiSU netlink cb_mutex compatibility anchor drifted")
+        access_content = access_content.replace(cb_mutex, guarded_cb_mutex, 1)
+        super_access.write_text(access_content, encoding="utf-8", newline="\n")
+    elif access_content.count(guarded_cb_mutex) != 1:
+        raise FeatureError("SukiSU netlink cb_mutex compatibility guard is duplicated")
+
 
 def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     if plan.get("selection", {}).get("root_source") != "sukisu":
@@ -532,7 +551,7 @@ def prepare_kpm(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
         "commit": source["commit"],
         "checkout": str(checkout),
         "source_adapter": "sukisu-android-kpm-no-ap-callbacks-v1",
-        "provider_bridge_adapter": "sukisu-susfs-kpm-symbol-resolver-v1",
+        "provider_bridge_adapter": "sukisu-susfs-kpm-compat-v2",
         "post_build": True,
     }
 
