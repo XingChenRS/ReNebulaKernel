@@ -34,6 +34,8 @@ release_id + root_source + susfs + kpm + vivo_vermagic + uname_tag
 
 工作流后续阶段不得从 branch、URL、用户字符串或环境变量重新推断行为，不得失败后静默换 provider，也不得跟随 `main`。
 
+一个 KMI family 可以登记多个 `release_id`。每个 ID 必须独立锁定一整套 manifest、superproject、`common` commit 与期望基础 release；它代表可复现源码快照，不是可任意填写或覆盖源码事实的补丁版本号。Android 16 / 6.12 当前同时登记 `6.12.58` 和 `6.12.92` 两个快照。
+
 ## 3. Root 与 feature 语义
 
 Root provider 是四选一：
@@ -44,6 +46,8 @@ Root provider 是四选一：
 - `resukisu`：ReSukiSU。
 
 KernelSU-Next 明确排除，不建立锁、profile、adapter 或兼容承诺。KSU debug 固定关闭。用户不直接选择 linkage、hook、multi-manager 或原始 Kconfig；这些由锁定 provider profile 和 literal variant 统一编译。
+
+KernelSU、SukiSU 和 ReSukiSU 的锁定源码共享 `pid1-init-pgrp-v1` 兼容适配器。它不移除 `SET_INIT_PGRP`，而是把上游对 `init_task` 的错误引用替换为 init pid namespace 中带 `struct pid` / `task_struct` 引用的 PID 1，并保留 userspace 原有 fallback。该适配同时作用于 built-in 与 LKM，且只接受完整旧函数恰好匹配一次。
 
 Feature 是独立供应链，不是 Root 名称的隐含效果：
 

@@ -8,7 +8,7 @@ ReNebulaKernel 是一个只使用锁定 Google GKI 源码的可复现构建系�
 
 | 选项 | 含义 |
 |---|---|
-| `release_id` | 选择一个锁定的 Google GKI release。列表顺序不表示 KMI 优先级。 |
+| `release_id` | 选择一个完整锁定的 Google GKI 源码快照。同一 KMI 可以有多个快照；列表顺序不表示优先级。 |
 | `root_source` | `none`、`kernelsu`、`sukisu` 或 `resukisu`。不包含 KernelSU-Next。 |
 | `susfs` | 只给 Built-in Image 集成锁定的 SUSFS；LKM 不受影响；6.18 暂不允许。 |
 | `kpm` | 仅可与 `sukisu` 同时选择：给 Built-in Image 启用 `CONFIG_KPM=y`，再注入 Android 模式的锁定 KernelPatch；LKM 不受影响；6.18 不允许。 |
@@ -37,9 +37,13 @@ KSU debug 固定关闭，不再作为用户选项。linkage、hook 和内部 Kco
 
 表中的“是”表示 schema、锁、适配器和静态准入已经建立，不表示所有组合都已完成真实 Image 编译。只有手动 Actions 的实际构建与产物验收通过后，组合才可称为 `image-verified`。
 
+`android16-6.12-2025-12-r1` 锁定 Google `6.12.58`，用于与 Vivo 的 `6.12.58-android16-6` 基线做最接近的公开源码对照；`android16-6.12-lts-2026-08-03` 则锁定较新的 `6.12.92`。二者是各自完整的 manifest、superproject 和 `common` commit 组合，不是把版本数字覆盖到另一份源码上。
+
 ## 不可变计划
 
 六项公开输入先被 `scripts/resolve_plan.py` 编译为 schema-5 `build-plan.json`。计划固定 Google source lock、Root/feature source lock、变体、配置和版本契约；后续步骤只消费计划，不再重新解释表单输入，也不会跟随浮动分支。
+
+三个 Root provider 接入时都会记录并应用 `pid1-init-pgrp-v1`：保留 `SET_INIT_PGRP` ioctl 与 userspace 失败回退，但通过带引用的 init pid namespace PID 1 查找目标进程，不再把 `init_task`（swapper）误当成 Android init。锁定源码的旧函数或 include 锚点若发生偏移，适配器会在写入前直接拒绝。
 
 版本只由 `scripts/configure_variant.py` 写入。管理后缀使用不重复 Android/KMI 信息的紧凑 `-RN4-...` 格式；`uname_tag` 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能带前导横线、重复基础 release，且必须在为 Google localversion 预留空间后仍满足 64 字节 `UTS_RELEASE` 限制。
 
