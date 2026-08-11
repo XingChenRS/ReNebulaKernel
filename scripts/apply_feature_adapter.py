@@ -35,6 +35,13 @@ COMMON_SUSFS_REJECTS = {
         "security/selinux/hooks.c.rej",
     },
 }
+COMMON_SUSFS_ZERO_REJECT_RELEASES = {
+    "android16-6.12-2025-12-r1": "android16-6.12",
+}
+COMMON_SUSFS_AUDITED_REJECT_RELEASES = {
+    "android14-6.1-lts-2026-08-03": "android14-6.1",
+    "android16-6.12-lts-2026-08-03": "android16-6.12",
+}
 
 
 class FeatureError(ValueError):
@@ -273,10 +280,20 @@ def finish_common_susfs_reject_adapter(common: Path, family: str) -> None:
         (common / relative).unlink()
 
 
-def apply_common_susfs_patch(common: Path, patch: Path, family: str) -> str:
+def apply_common_susfs_patch(
+    common: Path, patch: Path, family: str, release_id: str
+) -> str:
     if family not in COMMON_SUSFS_REJECTS:
         apply_git_patch(common, patch)
         return "strict-git-apply"
+    if not patch.is_file():
+        raise FeatureError(f"locked patch is missing: {patch}")
+    zero_reject_family = COMMON_SUSFS_ZERO_REJECT_RELEASES.get(release_id)
+    audited_reject_family = COMMON_SUSFS_AUDITED_REJECT_RELEASES.get(release_id)
+    if zero_reject_family != family and audited_reject_family != family:
+        raise FeatureError(
+            f"SUSFS common patch strategy is not locked for {release_id}/{family}"
+        )
     process = subprocess.run(
         ["git", "-C", str(common), "apply", "--reject", "--whitespace=fix", str(patch)],
         text=True,
@@ -285,9 +302,20 @@ def apply_common_susfs_patch(common: Path, patch: Path, family: str) -> str:
         check=False,
     )
     print(process.stdout, end="")
+    actual_rejects = {
+        path.relative_to(common).as_posix()
+        for path in common.rglob("*.rej")
+    }
+    if zero_reject_family == family:
+        if process.returncode != 0 or actual_rejects:
+            raise FeatureError(
+                f"locked {release_id} SUSFS patch must apply with zero rejects"
+            )
+        run(["git", "-C", str(common), "diff", "--check"])
+        return "strict-zero-reject-apply-v1"
     if process.returncode != 1:
         raise FeatureError(
-            f"locked {family} SUSFS patch must produce its audited Google common rejects"
+            f"locked {release_id} SUSFS patch must produce its audited Google common rejects"
         )
     finish_common_susfs_reject_adapter(common, family)
     run(["git", "-C", str(common), "diff", "--check"])
@@ -401,6 +429,7 @@ def apply_sukisu_provider_patch(provider_checkout: Path, patch: Path) -> None:
 def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
     provider = plan["selection"]["root_source"]
     family = plan["selection"]["family_id"]
+    release_id = plan["selection"]["release_id"]
     source = plan["features"]["susfs"].get("source")
     if not isinstance(source, dict):
         raise FeatureError("SUSFS plan is missing locked source provenance")
@@ -423,6 +452,7 @@ def apply_susfs(plan: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
         common,
         checkout / "kernel_patches" / f"50_add_susfs_in_gki-{family}.patch",
         family,
+        release_id,
     )
     provider_patch = checkout / "kernel_patches" / "KernelSU" / "10_enable_susfs_for_ksu.patch"
     strategy = susfs_provider_strategy(provider)

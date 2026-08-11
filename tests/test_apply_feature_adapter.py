@@ -188,6 +188,48 @@ class FeatureAdapterTests(unittest.TestCase):
             )
             self.assertFalse(any(common.rglob("*.rej")))
 
+    def test_android16_6_12_58_common_patch_requires_zero_rejects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            common = Path(temporary)
+            patch_file = common / "susfs.patch"
+            patch_file.write_text("locked patch fixture\n", encoding="utf-8")
+            completed = apply_feature_adapter.subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Applied with audited offsets\n"
+            )
+            with patch.object(
+                apply_feature_adapter.subprocess, "run", return_value=completed
+            ), patch.object(apply_feature_adapter, "run", return_value="") as runner:
+                strategy = apply_feature_adapter.apply_common_susfs_patch(
+                    common,
+                    patch_file,
+                    "android16-6.12",
+                    "android16-6.12-2025-12-r1",
+                )
+
+            self.assertEqual(strategy, "strict-zero-reject-apply-v1")
+            self.assertFalse(any(common.rglob("*.rej")))
+            runner.assert_called_once_with(["git", "-C", str(common), "diff", "--check"])
+
+    def test_android16_6_12_58_common_patch_rejects_unexpected_reject_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            common = Path(temporary)
+            patch_file = common / "susfs.patch"
+            patch_file.write_text("locked patch fixture\n", encoding="utf-8")
+            (common / "unexpected.rej").write_text("drift\n", encoding="utf-8")
+            completed = apply_feature_adapter.subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Applied with unexpected reject\n"
+            )
+
+            with patch.object(
+                apply_feature_adapter.subprocess, "run", return_value=completed
+            ), self.assertRaises(apply_feature_adapter.FeatureError):
+                apply_feature_adapter.apply_common_susfs_patch(
+                    common,
+                    patch_file,
+                    "android16-6.12",
+                    "android16-6.12-2025-12-r1",
+                )
+
     def test_kpm_image_patch_uses_explicit_input_and_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
