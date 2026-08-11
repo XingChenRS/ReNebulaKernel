@@ -186,6 +186,15 @@ jobs:
             --variant-id "${{ matrix.variant.id }}" \
             --kernel-workspace "$GITHUB_WORKSPACE/kernel"
 
+      - name: Apply kernel-family compatibility guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_kernel_compat_adapter.py \
+            --plan "$GITHUB_WORKSPACE/build-plan.json" \
+            --variant-id "${{ matrix.variant.id }}" \
+            --kernel-workspace "$GITHUB_WORKSPACE/kernel"
+
       - name: 准备当前 variant 的 SUSFS、KPM 或 Vivo 适配
         shell: bash
         run: |
@@ -392,6 +401,7 @@ jobs:
             ${{ runner.temp }}/build-record.json
             kernel/renebula-source-record.json
             kernel/renebula-root-record.json
+            kernel/renebula-compat-record.json
             kernel/renebula-feature-record.json
             kernel/renebula-kpm-record.json
             kernel/renebula-vivo-record.json
@@ -411,6 +421,7 @@ jobs:
             build-plan.json
             kernel/renebula-source-record.json
             kernel/renebula-root-record.json
+            kernel/renebula-compat-record.json
             kernel/renebula-feature-record.json
             kernel/renebula-vivo-record.json
             kernel/renebula-ddk-record.json

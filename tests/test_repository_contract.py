@@ -72,6 +72,19 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("root_linkage:", workflow_text.split("jobs:", 1)[0])
         self.assertNotIn("hook_mode:", workflow_text.split("jobs:", 1)[0])
 
+    def test_kernel_compatibility_guard_precedes_features_and_is_preserved(self):
+        workflow_text = (self.REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            workflow_text.count("python3 scripts/apply_kernel_compat_adapter.py"), 1
+        )
+        self.assertLess(
+            workflow_text.index("python3 scripts/apply_kernel_compat_adapter.py"),
+            workflow_text.index("python3 scripts/apply_feature_adapter.py"),
+        )
+        self.assertEqual(workflow_text.count("kernel/renebula-compat-record.json"), 2)
+
     def test_kpm_compiler_is_explicitly_targeted_to_arm64(self):
         workflow_text = (self.REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(
             encoding="utf-8"
