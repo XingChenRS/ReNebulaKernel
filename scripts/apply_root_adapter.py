@@ -30,6 +30,92 @@ KCONFIG_LINE = 'source "drivers/kernelsu/Kconfig"'
 KLEAF_FRAGMENT_ADAPTER = "kleaf-defconfig-fragment-arm64-v1"
 LEGACY_BUILD_ADAPTER = "legacy-build-sh-arm64-v1"
 RESUKISU_KSU_SRC_ANCHOR = "KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))"
+INIT_PGRP_COMPATIBILITY_ADAPTER = "pid1-init-pgrp-v1"
+LEGACY_INIT_PGRP = """static int do_set_init_pgrp(void __user *arg)
+{
+    int err;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    struct pid *pids[PIDTYPE_MAX] = { 0 };
+#endif
+
+    write_lock_irq(&tasklist_lock);
+    struct task_struct *p = current->group_leader;
+    struct pid *init_group = task_pgrp(&init_task);
+
+    err = -EPERM;
+    if (task_session(p) != task_session(&init_task))
+        goto out;
+
+    err = 0;
+    if (task_pgrp(p) != init_group) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+        change_pid(pids, p, PIDTYPE_PGID, init_group);
+#else
+        change_pid(p, PIDTYPE_PGID, init_group);
+#endif
+    }
+
+out:
+    write_unlock_irq(&tasklist_lock);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    free_pids(pids);
+#endif
+
+    return err;
+}
+"""
+PID1_INIT_PGRP = """static int do_set_init_pgrp(void __user *arg)
+{
+    int err;
+    struct pid *init_pid;
+    struct pid *init_group;
+    struct pid *init_session;
+    struct task_struct *init;
+    struct task_struct *p;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    struct pid *pids[PIDTYPE_MAX] = { 0 };
+#endif
+
+    rcu_read_lock();
+    init_pid = get_pid(find_pid_ns(1, &init_pid_ns));
+    rcu_read_unlock();
+    if (!init_pid)
+        return -ESRCH;
+
+    init = get_pid_task(init_pid, PIDTYPE_PID);
+    if (!init) {
+        put_pid(init_pid);
+        return -ESRCH;
+    }
+
+    write_lock_irq(&tasklist_lock);
+    p = current->group_leader;
+    init_group = task_pgrp(init);
+    init_session = task_session(init);
+    err = -ESRCH;
+    if (!init_group || !init_session)
+        goto out;
+    err = -EPERM;
+    if (task_session(p) != init_session)
+        goto out;
+    err = 0;
+    if (task_pgrp(p) != init_group) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+        change_pid(pids, p, PIDTYPE_PGID, init_group);
+#else
+        change_pid(p, PIDTYPE_PGID, init_group);
+#endif
+    }
+out:
+    write_unlock_irq(&tasklist_lock);
+    put_task_struct(init);
+    put_pid(init_pid);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    free_pids(pids);
+#endif
+    return err;
+}
+"""
 
 
 class AdapterError(ValueError):
@@ -237,6 +323,25 @@ def pin_kleaf_ksu_src(kbuild: Path, source: Path) -> None:
     )
 
 
+def repair_init_pgrp(dispatch: Path) -> str:
+    """Replace the locked upstream init_task shortcut with a referenced PID-1 lookup."""
+
+    try:
+        content = dispatch.read_text(encoding="utf-8")
+    except OSError as error:
+        raise AdapterError(f"cannot read provider dispatch source {dispatch}: {error}") from error
+    if content.count(LEGACY_INIT_PGRP) != 1:
+        raise AdapterError("KernelSU SET_INIT_PGRP source anchor drifted")
+    pid_include = "#include <linux/pid.h>\n"
+    version_include = "#include <linux/version.h>\n"
+    if content.count(pid_include) != 0 or content.count(version_include) != 1:
+        raise AdapterError("KernelSU SET_INIT_PGRP include anchor drifted")
+    repaired = content.replace(version_include, version_include + pid_include, 1)
+    repaired = repaired.replace(LEGACY_INIT_PGRP, PID1_INIT_PGRP, 1)
+    dispatch.write_text(repaired, encoding="utf-8", newline="\n")
+    return INIT_PGRP_COMPATIBILITY_ADAPTER
+
+
 def apply_provider(
     lock: Dict[str, Any], kernel_workspace: Path, variant_id: str, build_adapter: str
 ) -> Dict[str, Any]:
@@ -250,6 +355,7 @@ def apply_provider(
     source = checkout / lock["source_dir"]
     if not (source / "Kbuild").is_file() or not (source / "Kconfig").is_file():
         raise AdapterError("locked provider has no supported kernel adapter layout")
+    init_pgrp_adapter = repair_init_pgrp(source / "supercall" / "dispatch.c")
     record: Dict[str, Any] = {
         "provider": lock["provider"],
         "adapter": ROOT_ADAPTER,
@@ -260,6 +366,7 @@ def apply_provider(
         "ref": lock["ref"],
         "checkout": "KernelSU",
         "checkout_mode": "detached-commit",
+        "compatibility_adapters": [init_pgrp_adapter],
     }
     if variant_id == "lkm-module":
         record["integration"] = "external-gki-ddk"

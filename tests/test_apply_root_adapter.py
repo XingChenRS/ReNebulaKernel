@@ -16,6 +16,41 @@ import resolve_plan  # noqa: E402
 from sync_google_gki import canonical_json  # noqa: E402
 
 
+LEGACY_INIT_PGRP = """static int do_set_init_pgrp(void __user *arg)
+{
+    int err;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    struct pid *pids[PIDTYPE_MAX] = { 0 };
+#endif
+
+    write_lock_irq(&tasklist_lock);
+    struct task_struct *p = current->group_leader;
+    struct pid *init_group = task_pgrp(&init_task);
+
+    err = -EPERM;
+    if (task_session(p) != task_session(&init_task))
+        goto out;
+
+    err = 0;
+    if (task_pgrp(p) != init_group) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+        change_pid(pids, p, PIDTYPE_PGID, init_group);
+#else
+        change_pid(p, PIDTYPE_PGID, init_group);
+#endif
+    }
+
+out:
+    write_unlock_irq(&tasklist_lock);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    free_pids(pids);
+#endif
+
+    return err;
+}
+"""
+
+
 class RootAdapterTests(unittest.TestCase):
     REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,6 +80,15 @@ class RootAdapterTests(unittest.TestCase):
             encoding="utf-8",
         )
         (source / "Kconfig").write_text('menu "KernelSU"\nendmenu\n', encoding="utf-8")
+        dispatch = source / "supercall" / "dispatch.c"
+        dispatch.parent.mkdir()
+        dispatch.write_text(
+            "#include <linux/capability.h>\n"
+            "#include <linux/version.h>\n\n"
+            + LEGACY_INIT_PGRP
+            + "\nstatic int do_get_sulog_fd(void __user *arg)\n{\n    return 0;\n}\n",
+            encoding="utf-8",
+        )
         return checkout
 
     def release_id(self):
@@ -68,7 +112,7 @@ class RootAdapterTests(unittest.TestCase):
             self.assertEqual(record["provider"], "none")
             self.assertEqual(record["variant_id"], "baseline-image")
 
-    def test_all_three_providers_use_the_same_immutable_adapter_contract(self):
+    def test_all_three_providers_and_both_linkages_repair_init_pgrp(self):
         locks = self.REPO_ROOT / "locks" / "root-sources.lock.json"
         lock_ids = {
             "kernelsu": "kernelsu.main.4a5f4311",
@@ -76,28 +120,54 @@ class RootAdapterTests(unittest.TestCase):
             "resukisu": "resukisu.main.ca62a37f",
         }
         for provider, lock_id in lock_ids.items():
-            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as temporary:
-                workspace = self.make_workspace(Path(temporary))
-                checkout = self.fake_checkout(workspace)
-                lock = apply_root_adapter.load_root_lock(locks, lock_id)
-                with patch.object(apply_root_adapter, "checkout_provider", return_value=checkout), patch.object(
-                    apply_root_adapter, "create_symlink"
-                ):
-                    record = apply_root_adapter.apply_provider(
-                        lock,
-                        workspace,
-                        "lkm-module",
-                        apply_root_adapter.KLEAF_FRAGMENT_ADAPTER,
+            for variant_id in ("builtin-image", "lkm-module"):
+                with self.subTest(provider=provider, variant_id=variant_id), tempfile.TemporaryDirectory() as temporary:
+                    workspace = self.make_workspace(Path(temporary))
+                    checkout = self.fake_checkout(workspace)
+                    lock = apply_root_adapter.load_root_lock(locks, lock_id)
+                    with patch.object(apply_root_adapter, "checkout_provider", return_value=checkout), patch.object(
+                        apply_root_adapter, "create_symlink"
+                    ):
+                        record = apply_root_adapter.apply_provider(
+                            lock,
+                            workspace,
+                            variant_id,
+                            apply_root_adapter.KLEAF_FRAGMENT_ADAPTER,
+                        )
+                    dispatch = (checkout / "kernel" / "supercall" / "dispatch.c").read_text(
+                        encoding="utf-8"
                     )
-                self.assertEqual(record["provider"], provider)
-                self.assertEqual(record["commit"], lock["commit"])
-                self.assertEqual(record["checkout_mode"], "detached-commit")
-                self.assertEqual(record["integration"], "external-gki-ddk")
-                self.assertNotIn("provider_metadata_adapter", record)
-                self.assertEqual(
-                    (workspace / "common" / "drivers" / "Makefile").read_text(encoding="utf-8").count("kernelsu/"),
-                    0,
-                )
+                    self.assertEqual(record["provider"], provider)
+                    self.assertEqual(record["commit"], lock["commit"])
+                    self.assertEqual(record["checkout_mode"], "detached-commit")
+                    self.assertEqual(record["compatibility_adapters"], ["pid1-init-pgrp-v1"])
+                    self.assertNotIn("task_pgrp(&init_task)", dispatch)
+                    self.assertIn("find_pid_ns(1, &init_pid_ns)", dispatch)
+                    self.assertIn("get_pid_task(init_pid, PIDTYPE_PID)", dispatch)
+                    self.assertIn("put_task_struct(init)", dispatch)
+                    self.assertIn("put_pid(init_pid)", dispatch)
+                    self.assertEqual(dispatch.count("#include <linux/pid.h>"), 1)
+                    if variant_id == "lkm-module":
+                        self.assertEqual(record["integration"], "external-gki-ddk")
+                        self.assertNotIn("provider_metadata_adapter", record)
+                        self.assertEqual(
+                            (workspace / "common" / "drivers" / "Makefile").read_text(encoding="utf-8").count("kernelsu/"),
+                            0,
+                        )
+
+    def test_init_pgrp_repair_rejects_source_drift_without_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dispatch = Path(temporary) / "dispatch.c"
+            original = (
+                "#include <linux/capability.h>\n"
+                + LEGACY_INIT_PGRP.replace("task_pgrp(&init_task)", "task_pgrp(current)")
+            )
+            dispatch.write_text(original, encoding="utf-8")
+
+            with self.assertRaises(apply_root_adapter.AdapterError):
+                apply_root_adapter.repair_init_pgrp(dispatch)
+
+            self.assertEqual(dispatch.read_text(encoding="utf-8"), original)
 
     def test_only_builtin_integrates_provider_into_the_kernel_tree(self):
         lock = apply_root_adapter.load_root_lock(
