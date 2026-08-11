@@ -30,7 +30,7 @@ KCONFIG_LINE = 'source "drivers/kernelsu/Kconfig"'
 KLEAF_FRAGMENT_ADAPTER = "kleaf-defconfig-fragment-arm64-v1"
 LEGACY_BUILD_ADAPTER = "legacy-build-sh-arm64-v1"
 RESUKISU_KSU_SRC_ANCHOR = "KSU_SRC := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))"
-INIT_PGRP_COMPATIBILITY_ADAPTER = "pid0-init-struct-pid-v2"
+INIT_PGRP_COMPATIBILITY_ADAPTER = "pid0-canonical-pid-v2"
 LEGACY_INIT_PGRP = """static int do_set_init_pgrp(void __user *arg)
 {
     int err;
@@ -73,10 +73,14 @@ PID0_INIT_PGRP = """static int do_set_init_pgrp(void __user *arg)
 
     write_lock_irq(&tasklist_lock);
     struct task_struct *p = current->group_leader;
+#ifdef MODULE
+    struct pid *init_group = task_pid(&init_task);
+#else
     struct pid *init_group = &init_struct_pid;
+#endif
 
     err = -EPERM;
-    if (task_session(p) != &init_struct_pid)
+    if (task_session(p) != init_group)
         goto out;
 
     err = 0;

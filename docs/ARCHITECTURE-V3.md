@@ -47,7 +47,7 @@ Root provider 是四选一：
 
 KernelSU-Next 明确排除，不建立锁、profile、adapter 或兼容承诺。KSU debug 固定关闭。用户不直接选择 linkage、hook、multi-manager 或原始 Kconfig；这些由锁定 provider profile 和 literal variant 统一编译。
 
-KernelSU、SukiSU 和 ReSukiSU 的锁定源码共享 `pid0-init-struct-pid-v2` 兼容适配器。它不移除 `SET_INIT_PGRP`，而是按上游功能原意直接加入内核 PID0 的恒定 `&init_struct_pid` 进程组，并保留 userspace 原有 fallback。该 provider 适配同时作用于 built-in 与 LKM，且只接受完整旧函数恰好匹配一次。
+KernelSU、SukiSU 和 ReSukiSU 的锁定源码共享 `pid0-canonical-pid-v2` 兼容适配器。它不移除 `SET_INIT_PGRP`，而是按上游功能原意加入 PID0 的恒定进程组，并保留 userspace 原有 fallback。Built-in 直接引用 `&init_struct_pid`；LKM 不能链接这个未导出符号，因此通过已导出的 `init_task` 读取未受本次故障影响的 `thread_pid`，得到同一个 PID0 对象。该 provider 适配同时作用于 built-in 与 LKM，且只接受完整旧函数恰好匹配一次。
 
 Android 16 / 6.12 的 Image 另有独立的 `android16-6.12-init-task-pid-read-v1` 核心保护：`get_task_pid()` 与 `__task_pid_nr_ns()` 读取 PID0 时若发现 `init_task` 的 PID slot 已偏离 `&init_struct_pid`，只告警一次并返回该恒定对象，不写 PID 链表、不验证或解引用损坏地址。它不作用于 LKM 或其他 KMI，也不成为公开 workflow 开关；`renebula-compat-record.json` 记录每个 variant 是否实际应用。
 

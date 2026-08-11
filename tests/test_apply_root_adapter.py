@@ -141,14 +141,16 @@ class RootAdapterTests(unittest.TestCase):
                     self.assertEqual(record["commit"], lock["commit"])
                     self.assertEqual(record["checkout_mode"], "detached-commit")
                     self.assertEqual(
-                        record["compatibility_adapters"], ["pid0-init-struct-pid-v2"]
+                        record["compatibility_adapters"], ["pid0-canonical-pid-v2"]
                     )
                     self.assertNotIn("task_pgrp(&init_task)", dispatch)
                     self.assertNotIn("task_session(&init_task)", dispatch)
                     self.assertNotIn("find_pid_ns(1, &init_pid_ns)", dispatch)
                     self.assertNotIn("get_pid_task(", dispatch)
+                    self.assertIn("#ifdef MODULE", dispatch)
+                    self.assertIn("struct pid *init_group = task_pid(&init_task);", dispatch)
                     self.assertIn("struct pid *init_group = &init_struct_pid;", dispatch)
-                    self.assertIn("task_session(p) != &init_struct_pid", dispatch)
+                    self.assertIn("task_session(p) != init_group", dispatch)
                     self.assertIn("change_pid(p, PIDTYPE_PGID, init_group);", dispatch)
                     self.assertEqual(dispatch.count("#include <linux/pid.h>"), 1)
                     if variant_id == "lkm-module":

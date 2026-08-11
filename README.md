@@ -43,7 +43,7 @@ KSU debug 固定关闭，不再作为用户选项。linkage、hook 和内部 Kco
 
 六项公开输入先被 `scripts/resolve_plan.py` 编译为 schema-5 `build-plan.json`。计划固定 Google source lock、Root/feature source lock、变体、配置和版本契约；后续步骤只消费计划，不再重新解释表单输入，也不会跟随浮动分支。
 
-三个 Root provider 接入时都会记录并应用 `pid0-init-struct-pid-v2`：保留 `SET_INIT_PGRP` ioctl 与 userspace 失败回退，并直接使用内核定义的 PID0 恒定身份 `&init_struct_pid`，避免从已被 Vivo 运行时状态破坏的 `init_task.signal->pids[]` 读取目标。Android 16 / 6.12 的 Image 还会记录 `android16-6.12-init-task-pid-read-v1`，只在 PID0 读路径发现该恒定身份被破坏时以 `&init_struct_pid` 返回正确结果；LKM 与其他 KMI 不应用这项核心保护。两项适配都只接受锁定源码锚点恰好匹配，源码漂移会在写入前直接拒绝。
+三个 Root provider 接入时都会记录并应用 `pid0-canonical-pid-v2`：保留 `SET_INIT_PGRP` ioctl 与 userspace 失败回退，并避开已被 Vivo 运行时状态破坏的 `init_task.signal->pids[]`。Built-in 直接使用 PID0 恒定身份 `&init_struct_pid`；LKM 因该符号未导出，改从已导出的 `init_task.thread_pid`（`task_pid(&init_task)`）取得同一个 PID0 对象。Android 16 / 6.12 的 Image 还会记录 `android16-6.12-init-task-pid-read-v1`，只在 PID0 读路径发现该恒定身份被破坏时以 `&init_struct_pid` 返回正确结果；LKM 与其他 KMI 不应用这项核心保护。两项适配都只接受锁定源码锚点恰好匹配，源码漂移会在写入前直接拒绝。
 
 版本只由 `scripts/configure_variant.py` 写入。管理后缀使用不重复 Android/KMI 信息的紧凑 `-RN4-...` 格式；`uname_tag` 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能带前导横线、重复基础 release，且必须在为 Google localversion 预留空间后仍满足 64 字节 `UTS_RELEASE` 限制。
 
