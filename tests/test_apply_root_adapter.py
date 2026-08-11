@@ -140,12 +140,16 @@ class RootAdapterTests(unittest.TestCase):
                     self.assertEqual(record["provider"], provider)
                     self.assertEqual(record["commit"], lock["commit"])
                     self.assertEqual(record["checkout_mode"], "detached-commit")
-                    self.assertEqual(record["compatibility_adapters"], ["pid1-init-pgrp-v1"])
+                    self.assertEqual(
+                        record["compatibility_adapters"], ["pid0-init-struct-pid-v2"]
+                    )
                     self.assertNotIn("task_pgrp(&init_task)", dispatch)
-                    self.assertIn("find_pid_ns(1, &init_pid_ns)", dispatch)
-                    self.assertIn("get_pid_task(init_pid, PIDTYPE_PID)", dispatch)
-                    self.assertIn("put_task_struct(init)", dispatch)
-                    self.assertIn("put_pid(init_pid)", dispatch)
+                    self.assertNotIn("task_session(&init_task)", dispatch)
+                    self.assertNotIn("find_pid_ns(1, &init_pid_ns)", dispatch)
+                    self.assertNotIn("get_pid_task(", dispatch)
+                    self.assertIn("struct pid *init_group = &init_struct_pid;", dispatch)
+                    self.assertIn("task_session(p) != &init_struct_pid", dispatch)
+                    self.assertIn("change_pid(p, PIDTYPE_PGID, init_group);", dispatch)
                     self.assertEqual(dispatch.count("#include <linux/pid.h>"), 1)
                     if variant_id == "lkm-module":
                         self.assertEqual(record["integration"], "external-gki-ddk")
