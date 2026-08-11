@@ -42,12 +42,24 @@ class RepositoryContractTests(unittest.TestCase):
         )
         self.assertEqual(inputs["root_source"]["options"], ["none", "kernelsu", "sukisu", "resukisu"])
         self.assertEqual(inputs["root_source"]["default"], "none")
+        self.assertIn("android16-6.12-2025-12-r1", inputs["release_id"]["options"])
+        self.assertIn("6.12.58", inputs["release_id"]["description"])
+        self.assertIn("6.12.92", inputs["release_id"]["description"])
         for name in ("susfs", "kpm", "vivo_vermagic"):
             self.assertEqual(inputs[name]["type"], "boolean")
             self.assertEqual(inputs[name]["default"], "false")
         self.assertIn("6.6", inputs["vivo_vermagic"]["description"])
         for value in inputs.values():
             self.assertTrue(any(ord(char) > 127 for char in value["description"]))
+
+    def test_workflow_help_is_readable_utf8(self):
+        inputs = self.workflow()["on"]["workflow_dispatch"]["inputs"]
+        for name, value in inputs.items():
+            with self.subTest(input=name):
+                description = value["description"]
+                self.assertNotIn("锛", description)
+                self.assertNotIn("閫", description)
+                self.assertNotIn("鏋", description)
 
     def test_workflow_builds_the_verified_variant_matrix(self):
         workflow_text = (self.REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")

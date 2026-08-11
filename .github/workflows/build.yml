@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_id:
-        description: 选择 Google GKI 基线；按 Android/KMI 顺序列出，表单默认不代表任何 KMI 优先级
+        description: 选择完整锁定的 Google GKI 源码快照；6.12 可选 Vivo 同基线 6.12.58 或较新 LTS 6.12.92
         required: true
         type: choice
         options:
@@ -14,6 +14,7 @@ on:
           - android14-5.15-lts-2026-08-03
           - android14-6.1-lts-2026-08-03
           - android15-6.6-lts-2026-08-03
+          - android16-6.12-2025-12-r1
           - android16-6.12-lts-2026-08-03
           - android17-6.18-lts-2026-08-03
         default: android12-5.10-lts-2026-08-03

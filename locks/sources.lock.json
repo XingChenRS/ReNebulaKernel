@@ -187,6 +187,37 @@
         "expected_base_release": "6.6.142"
       }
     },
+    "gki.android16-6.12.2025-12-r1": {
+      "id": "gki.android16-6.12.2025-12-r1",
+      "family_id": "android16-6.12",
+      "release_id": "android16-6.12-2025-12-r1",
+      "source_mode": "manifest-superproject-v1",
+      "manifest": {
+        "url": "https://android.googlesource.com/kernel/manifest",
+        "commit": "cedd514499f1d411a1b42326dbffdb6b164f0f01",
+        "file": "default.xml",
+        "sha256": "826ce00239dfc3e049ab53c42fcec79c6c3127e7b3a49807c0fe00a226a6ae41"
+      },
+      "superproject": {
+        "url": "https://android.googlesource.com/kernel/superproject",
+        "commit": "c516b6c3e5b60a0c6f54715cf229a34d64682894",
+        "manifest_ref": "refs/heads/common-android16-6.12-2025-12"
+      },
+      "materialization": {
+        "expected_project_count": 53,
+        "required_paths": [
+          "build/kernel",
+          "common"
+        ]
+      },
+      "common": {
+        "path": "common",
+        "commit": "67fe3c9df146f5752b3cd5c69c8e0460221a8018"
+      },
+      "version": {
+        "expected_base_release": "6.12.58"
+      }
+    },
     "gki.android16-6.12.lts.2026-08-03": {
       "id": "gki.android16-6.12.lts.2026-08-03",
       "family_id": "android16-6.12",

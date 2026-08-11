@@ -51,6 +51,21 @@ class ResolvePlanTests(unittest.TestCase):
                     if root_source != "none":
                         self.assertRegex(first["root"]["source"]["commit"], r"^[0-9a-f]{40}$")
 
+    def test_android16_6_12_58_is_a_complete_locked_snapshot(self):
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            "android16-6.12-2025-12-r1",
+            "resukisu",
+            susfs=True,
+        )
+
+        self.assertEqual(plan["selection"]["family_id"], "android16-6.12")
+        self.assertEqual(plan["version"]["expected_base_release"], "6.12.58")
+        self.assertEqual(
+            plan["source"]["common_commit"],
+            "67fe3c9df146f5752b3cd5c69c8e0460221a8018",
+        )
+
     def test_features_require_a_root_source(self):
         release_id = self.release_for("android14-6.1")
         for feature in ("susfs", "kpm", "vivo_vermagic"):

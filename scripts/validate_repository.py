@@ -73,8 +73,8 @@ def ensure_registry_graph(root: Path) -> Dict[str, Any]:
     root_entries = registry["root_sources"]
     feature_entries = registry["features"]
     families = {entry["family_id"] for entry in releases}
-    if families != set(REQUIRED_FAMILY_ADAPTERS) or len(releases) != len(families):
-        raise RepositoryError("registry must contain one release for every complete GKI KMI chain")
+    if families != set(REQUIRED_FAMILY_ADAPTERS):
+        raise RepositoryError("registry must cover every complete GKI KMI chain")
     if [entry["id"] for entry in root_entries] != ROOT_SOURCES:
         raise RepositoryError("registry root source order is invalid")
     if [entry["id"] for entry in feature_entries] != ["susfs", "kpm", "vivo-vermagic"]:
