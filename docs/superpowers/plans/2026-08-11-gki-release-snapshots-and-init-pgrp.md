@@ -1,5 +1,10 @@
 # GKI Release Snapshots and `SET_INIT_PGRP` Repair Implementation Plan
 
+> **Superseded:** The PID1 portion of this historical plan was replaced after
+> later pstore and Image-symbol evidence. See
+> `2026-08-11-android16-6.12-init-task-pid-guard.md` for the active PID0 design
+> and implementation.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a reproducible Android 16 / 6.12.58 release choice, repair the shared KernelSU-family `SET_INIT_PGRP` implementation without removing it, and run one ReSukiSU + SUSFS verification build.

@@ -1,5 +1,11 @@
 # GKI Release Snapshots and `SET_INIT_PGRP` Repair Design
 
+> **Superseded:** The PID1 repair in this document was disproved by later
+> pstore and Image-symbol evidence. The active design is
+> `2026-08-11-android16-6.12-init-task-pid-guard-design.md`, which preserves
+> the intended PID0 group through `&init_struct_pid` and adds a 6.12 PID0 read
+> guard.
+
 ## Goal
 
 Build a reproducible Android 16 / 6.12.58 test kernel for Vivo PD2502 while preserving the `SET_INIT_PGRP` feature and removing its observed kernel-panic path.
