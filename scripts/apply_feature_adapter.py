@@ -111,9 +111,11 @@ def validate_feature_scope(plan: Dict[str, Any], variant_id: str) -> Dict[str, b
     if variant_features["kpm"] and provider != "sukisu":
         raise FeatureError("KPM requires the SukiSU in-kernel bridge")
     if variant_features["vivo_vermagic"] and (
-        variant_id != "lkm-module" or series not in VIVO_SERIES
+        variant_id not in {"builtin-image", "lkm-module"} or series not in VIVO_SERIES
     ):
-        raise FeatureError("Vivo vermagic is an LKM feature supported only on 5.10, 5.15, and 6.1")
+        raise FeatureError(
+            "Vivo vermagic is supported only for built-in and LKM variants on 5.10, 5.15, and 6.1"
+        )
     for name, enabled in variant_features.items():
         top = features.get(name)
         if not isinstance(top, dict) or not isinstance(top.get("enabled"), bool):
@@ -679,7 +681,17 @@ def prepare_features(plan: Dict[str, Any], variant_id: str, workspace: Path) -> 
     if scope["kpm"]:
         applied.append(prepare_kpm(plan, workspace))
     if scope["vivo_vermagic"]:
-        applied.append({"feature": "vivo_vermagic", "strategy": "deferred-ddk-modinfo"})
+        if variant_id == "builtin-image":
+            result = apply_vivo_vermagic(workspace / "common" / "include" / "linux" / "vermagic.h")
+            applied.append(
+                {
+                    "feature": "vivo_vermagic",
+                    "strategy": "kernel-vermagic-header-v1",
+                    **result,
+                }
+            )
+        else:
+            applied.append({"feature": "vivo_vermagic", "strategy": "deferred-ddk-modinfo"})
     record = {"schema": 1, "variant_id": variant_id, "applied": applied}
     (workspace / "renebula-feature-record.json").write_bytes(canonical_json(record) + b"\n")
     return record

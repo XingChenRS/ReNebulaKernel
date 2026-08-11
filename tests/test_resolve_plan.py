@@ -81,7 +81,7 @@ class ResolvePlanTests(unittest.TestCase):
                 "resukisu",
                 vivo_vermagic=True,
             )
-            self.assertFalse(plan["variants"][0]["features"]["vivo_vermagic"])
+            self.assertTrue(plan["variants"][0]["features"]["vivo_vermagic"])
             self.assertTrue(plan["variants"][1]["features"]["vivo_vermagic"])
         for family_id in ("android15-6.6", "android16-6.12", "android17-6.18"):
             with self.subTest(family_id=family_id), self.assertRaisesRegex(

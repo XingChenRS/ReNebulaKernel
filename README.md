@@ -12,13 +12,13 @@ ReNebulaKernel 是一个只使用锁定 Google GKI 源码的可复现构建系�
 | `root_source` | `none`、`kernelsu`、`sukisu` 或 `resukisu`。不包含 KernelSU-Next。 |
 | `susfs` | 只给 Built-in Image 集成锁定的 SUSFS；LKM 不受影响；6.18 暂不允许。 |
 | `kpm` | 仅可与 `sukisu` 同时选择：给 Built-in Image 启用 `CONFIG_KPM=y`，再注入 Android 模式的锁定 KernelPatch；LKM 不受影响；6.18 不允许。 |
-| `vivo_vermagic` | 始终显示；开启后只给 LKM 的标准 vermagic 增加独立 `vivo` token。仅 5.10、5.15、6.1 允许，6.6 及以上在解析阶段拒绝。 |
+| `vivo_vermagic` | 始终显示；开启后同时给 Built-in Image 与 LKM 的构建派生 vermagic 增加独立 `vivo` token，让 Vivo 设备选择 OEM 模块集。仅 5.10、5.15、6.1 允许，6.6 及以上在解析阶段拒绝。 |
 | `uname_tag` | 可选安全标签，例如 `MLXC_RENB`。不要写前导 `-`；系统只追加标签，不覆盖 Google 基础版本。 |
 
 `root_source=none` 只产出 `baseline-image`。选择任一 Root 实现后，一次请求自动并行产生：
 
 - `builtin-image`：Root 编入 Image；SUSFS 只作用于这个变体，SukiSU 的 KPM 也只作用于这个变体。
-- `lkm-module`：产出 `kernelsu.ko`；Vivo vermagic 只作用于这个变体。
+- `lkm-module`：产出 `kernelsu.ko`。Vivo vermagic 同时作用于这个变体和 Built-in Image，保证两路的模块版本契约一致。
 
 KSU debug 固定关闭，不再作为用户选项。linkage、hook 和内部 Kconfig 也不是公开输入，而是由 provider profile 和变体契约确定。
 

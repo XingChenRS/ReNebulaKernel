@@ -39,7 +39,7 @@ on:
         type: boolean
         default: false
       vivo_vermagic:
-        description: 为 LKM 的 vermagic 增加 vivo 标记；始终可见，但仅 5.10、5.15、6.1 可开启，6.6 及以上会拒绝
+        description: 为内置 Image 与 LKM 的 vermagic 增加 vivo 标记，以选择 Vivo OEM 模块；始终可见，仅 5.10、5.15、6.1 可开启，6.6 及以上会拒绝
         required: true
         type: boolean
         default: false

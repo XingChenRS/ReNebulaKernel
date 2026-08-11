@@ -61,10 +61,61 @@ class FeatureAdapterTests(unittest.TestCase):
         )
         builtin = apply_feature_adapter.validate_feature_scope(plan, "builtin-image")
         lkm = apply_feature_adapter.validate_feature_scope(plan, "lkm-module")
-        self.assertEqual(builtin, {"susfs": True, "kpm": True, "vivo_vermagic": False})
+        self.assertEqual(builtin, {"susfs": True, "kpm": True, "vivo_vermagic": True})
         self.assertEqual(lkm, {"susfs": False, "kpm": False, "vivo_vermagic": True})
         with self.assertRaises(apply_feature_adapter.FeatureError):
             apply_feature_adapter.validate_feature_scope(plan, "baseline-image")
+
+    def test_builtin_prepare_applies_vivo_to_the_kernel_header(self):
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_id(),
+            "resukisu",
+            vivo_vermagic=True,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            header = workspace / "common" / "include" / "linux" / "vermagic.h"
+            header.parent.mkdir(parents=True)
+            header.write_text(
+                '#define VERMAGIC_STRING \\\n\tUTS_RELEASE " " \\\n\tMODULE_VERMAGIC_MODVERSIONS \\\n\tMODULE_ARCH_VERMAGIC \\\n\tMODULE_RANDSTRUCT\n',
+                encoding="utf-8",
+            )
+
+            record = apply_feature_adapter.prepare_features(plan, "builtin-image", workspace)
+
+            self.assertIn('"vivo " MODULE_ARCH_VERMAGIC', header.read_text(encoding="utf-8"))
+            self.assertEqual(
+                record["applied"],
+                [
+                    {
+                        "feature": "vivo_vermagic",
+                        "strategy": "kernel-vermagic-header-v1",
+                        "path": str(header),
+                        "token": "vivo ",
+                        "anchor": "MODULE_ARCH_VERMAGIC",
+                    }
+                ],
+            )
+
+    def test_lkm_prepare_defers_vivo_to_module_modinfo(self):
+        plan = resolve_plan.resolve_plan(
+            self.REPO_ROOT,
+            self.release_id(),
+            "resukisu",
+            vivo_vermagic=True,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            record = apply_feature_adapter.prepare_features(
+                plan,
+                "lkm-module",
+                Path(temporary),
+            )
+
+        self.assertEqual(
+            record["applied"],
+            [{"feature": "vivo_vermagic", "strategy": "deferred-ddk-modinfo"}],
+        )
 
     def test_susfs_has_explicit_provider_strategies(self):
         self.assertEqual(apply_feature_adapter.susfs_provider_strategy("kernelsu"), "official-kernelsu-patch")

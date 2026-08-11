@@ -4,7 +4,7 @@
 
 ReNebulaKernel 只以锁定的 Google GKI 源码链路为内核输入。八个具有完整公开源码与构建链路的 KMI family 都是一等公民，不设置默认优先 KMI，也不引用不完整的 Vivo `common/` 源码。
 
-Vivo 适配不是另一套源码或构建流。它只是 `vivo_vermagic` 布尔能力：在 5.10、5.15、6.1 的 LKM 构建中，把独立 `vivo` token 插入 `aarch64` 前；开关始终可见，但 6.6 及以上必须在任何源码同步或打补丁前拒绝。
+Vivo 适配不是另一套源码或构建流。它只是 `vivo_vermagic` 布尔能力：在 5.10、5.15、6.1 中同时让 Built-in Image 与 LKM 的构建派生 vermagic 在 `aarch64` 前包含独立 `vivo` token，使 OEM 模块集与单独产出的 Root LKM 遵守同一模块版本契约；开关始终可见，但 6.6 及以上必须在任何源码同步或打补丁前拒绝。
 
 ## 2. 单一 Workflow 与计划边界
 

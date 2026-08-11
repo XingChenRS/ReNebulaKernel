@@ -311,7 +311,7 @@ def _variant(
     feature_flags = {
         "susfs": request_features["susfs"] and variant_id == "builtin-image",
         "kpm": request_features["kpm"] and variant_id == "builtin-image",
-        "vivo_vermagic": request_features["vivo_vermagic"] and variant_id == "lkm-module",
+        "vivo_vermagic": request_features["vivo_vermagic"],
     }
     if root_source == "none":
         token = "base"
