@@ -19,7 +19,7 @@ release_id + root_source + susfs + kpm + vivo_vermagic + uname_tag
                  +----------------+----------------+
                  |                                 |
           builtin-image                      lkm-module
-       SUSFS; SukiSU KPM                 Vivo vermagic only
+  SUSFS; SukiSU KPM; Vivo header          Vivo .modinfo
 ```
 
 `root_source=none` 是特例，只生成 `baseline-image`。非 `none` Root 请求不再要求用户选择 built-in 或 LKM，而是同时生成两种产物。
@@ -55,9 +55,9 @@ Feature 是独立供应链，不是 Root 名称的隐含效果：
 
 - SUSFS：按 KMI 选择锁定的 `susfs4ksu` source/patch，只应用到 built-in；6.18 因没有锁定上游分支而拒绝。
 - KPM：只允许 `root_source=sukisu`。SukiSU built-in 必须同时具备 `CONFIG_KPM=y` 内核桥接和锁定的 Android `SukiSU_KernelPatch_patch` Image 层；生成的 `kpimg` 必须验收为 `config=android,release`。6.18 不准入。
-- Vivo vermagic：无外部源码，只修改 LKM 构建产生的 module vermagic；仅 5.10/5.15/6.1 准入。
+- Vivo vermagic：无外部源码；Built-in 在编译前修改内核的 build-derived vermagic，LKM 在 DDK 产物的 `.modinfo` 中加入同一 token；仅 5.10/5.15/6.1 准入。
 
-这些开关可以同时请求，但 resolver 把它们投影到各自适用的变体并校验 provider 能力，避免把 built-in feature 错施加给 LKM、把 SukiSU 专用 KPM 套给其他 provider，或把 Vivo 标记写入 Image。
+这些开关可以同时请求，但 resolver 把它们投影到各自适用的变体并校验 provider 能力，避免把 built-in feature 错施加给 LKM、把 SukiSU 专用 KPM 套给其他 provider，或在 6.6 及以上错误启用 Vivo 标记。
 
 ## 4. 适配顺序
 
@@ -67,7 +67,8 @@ Feature 是独立供应链，不是 Root 名称的隐含效果：
 恢复并校验计划
   -> 同步并校验 Google 源码
   -> 接入 Root provider
-  -> 应用源码期 feature（SUSFS / SukiSU KPM source adapter）
+  -> 应用 family 兼容保护
+  -> 应用源码期 feature（SUSFS / SukiSU KPM / Vivo kernel vermagic）
   -> 统一编译 Kconfig 与 LOCALVERSION
   -> 构建 Image 或 kernelsu.ko
   -> 对 Image 执行 KPM 后处理（若开启）

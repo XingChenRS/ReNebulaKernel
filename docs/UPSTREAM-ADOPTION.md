@@ -22,7 +22,7 @@ ReNebulaKernel 从原始项目获取锁定源码或补丁，不复制第三方�
 |---|---|---|
 | SUSFS | [simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) | 5.10 至 6.12 每个 KMI 分支分别锁定 commit；按 provider 使用官方补丁、原生接入或受审计的 Suki 适配。 |
 | KPM | [SukiSU-Ultra/SukiSU_KernelPatch_patch](https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch) | 仅对 SukiSU built-in 准入：内核启用 `CONFIG_KPM=y` 桥接，外部 `kpimg` 保持 Android 模式，验收后再对 Image 显式后处理。 |
-| Vivo vermagic | 无外部源码 | 根据真实 Vivo 5.15/6.1 模块样本，将单独 `vivo` token 插入 module arch token 前。 |
+| Vivo vermagic | 无外部源码 | 根据真实 Vivo 5.15/6.1 模块样本，将单独 `vivo` token 同时插入 Built-in 内核与 LKM 的 arch vermagic token 前。 |
 
 当前锁定 ReSukiSU 源码只有对既有 KernelPatch 的检测，没有 `CONFIG_KPM` 和 `sukisu_kpm_*` 桥接符号；官方 KernelSU 同样没有这套桥接，因此不能套用 SukiSU 的 KernelPatch fork。6.18 当前没有锁定的 SUSFS 分支，也未进入 KPM 准入矩阵。Vivo vermagic 只允许 5.10、5.15、6.1；6.6 及以上拒绝。
 

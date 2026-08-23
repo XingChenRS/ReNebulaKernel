@@ -1,6 +1,8 @@
 # ReNebulaKernel
 
-ReNebulaKernel 是一个只使用锁定 Google GKI 源码的可复现构建系统。它不再下载、替换或引用 Vivo 内核源码；Vivo 兼容性被收敛为可审计的 LKM `vermagic` 标记。
+ReNebulaKernel 是一个只使用锁定 Google GKI 源码的可复现构建系统。它不再下载、替换或引用 Vivo 内核源码；Vivo 兼容性被收敛为可审计的 Built-in/LKM `vermagic` 能力。
+
+当前维护结论、已验证构建与设备侧已知限制统一记录在 [PROJECT-STATUS.md](docs/PROJECT-STATUS.md)。其中明确区分源码准入、Actions 构建成功和真实设备兼容，避免把静态能力表误读为设备支持清单。
 
 ## 唯一构建入口
 
@@ -56,4 +58,4 @@ python scripts/resolve_plan.py --release-id android14-6.1-lts-2026-08-03 --root-
 python scripts/validate_repository.py --plan build-plan.json
 ```
 
-架构约束见 [ARCHITECTURE-V3.md](docs/ARCHITECTURE-V3.md)，上游锁定与采纳边界见 [UPSTREAM-ADOPTION.md](docs/UPSTREAM-ADOPTION.md)。
+当前状态见 [PROJECT-STATUS.md](docs/PROJECT-STATUS.md)，架构约束见 [ARCHITECTURE-V3.md](docs/ARCHITECTURE-V3.md)，上游锁定与采纳边界见 [UPSTREAM-ADOPTION.md](docs/UPSTREAM-ADOPTION.md)。
