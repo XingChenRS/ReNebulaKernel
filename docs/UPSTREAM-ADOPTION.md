@@ -32,7 +32,7 @@ ReNebulaKernel 从原始项目获取锁定源码或补丁，不复制第三方�
 |---|---|---|
 | [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) | 观察 GKI 覆盖、组合语义与构建诊断 | 不 vendoring Workflow 或组合脚本 |
 | [xxz13352/GKI_KernelSU_SUSFS](https://github.com/xxz13352/GKI_KernelSU_SUSFS) | 观察解耦选项与 uname 反例 | 不复制实现；避免把完整 base release 再写入 localversion |
-| [GX0704/vivo_SakiSU](https://github.com/GX0704/vivo_SakiSU) | 理解 Vivo 模块加载兼容需求 | 不引入 Vivo 内核源码；只保留 vermagic 能力边界 |
+| [XingChenRS/vivo_SakiSU]((https://github.com/XingChenRS/SakiSU)) | 理解 Vivo 模块加载兼容需求 | 不引入 Vivo 内核源码；只保留 vermagic 能力边界 |
 
 ## 拒绝的行为
 
